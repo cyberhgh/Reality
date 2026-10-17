@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { put, list, del } from "@vercel/blob";
+import { put, list, head } from "@vercel/blob";
 import type { StoreData } from "./types";
 
 const EMPTY: StoreData = { placements: [], zones: [] };
@@ -39,39 +39,63 @@ async function withLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-function hasBlobToken() {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+function blobToken() {
+  return process.env.BLOB_READ_WRITE_TOKEN;
+}
+
+function blobEnabled() {
+  return Boolean(blobToken()) || Boolean(process.env.VERCEL);
+}
+
+function blobOpts() {
+  const token = blobToken();
+  return token ? { token } : undefined;
+}
+
+async function fetchJson(url: string): Promise<StoreData | null> {
+  // Bust Next.js / CDN caches — stale reads were wiping newly placed items.
+  const bust = url.includes("?") ? `&v=${Date.now()}` : `?v=${Date.now()}`;
+  const res = await fetch(`${url}${bust}`, {
+    cache: "no-store",
+    headers: { "Cache-Control": "no-cache" },
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as StoreData;
 }
 
 async function readFromBlob(): Promise<StoreData | null> {
-  if (!hasBlobToken()) return null;
+  if (!blobEnabled()) return null;
+  const opts = blobOpts();
   try {
-    const { blobs } = await list({ prefix: BLOB_PATHNAME, limit: 1 });
-    const blob = blobs.find((b) => b.pathname === BLOB_PATHNAME) ?? blobs[0];
-    if (!blob) return null;
-    const res = await fetch(blob.url, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as StoreData;
-  } catch {
+    try {
+      const meta = await head(BLOB_PATHNAME, opts);
+      return await fetchJson(meta.url);
+    } catch {
+      const { blobs } = await list({ prefix: BLOB_PATHNAME, limit: 5, ...opts });
+      const blob =
+        blobs.find((b) => b.pathname === BLOB_PATHNAME) ?? blobs[0] ?? null;
+      if (!blob) return null;
+      return await fetchJson(blob.url);
+    }
+  } catch (err) {
+    console.error("Blob read failed:", err);
     return null;
   }
 }
 
 async function writeToBlob(data: StoreData) {
-  if (!hasBlobToken()) return false;
+  if (!blobEnabled()) return false;
   try {
-    const { blobs } = await list({ prefix: BLOB_PATHNAME, limit: 5 });
-    await Promise.all(
-      blobs.map((b) => del(b.url).catch(() => undefined)),
-    );
-    await put(BLOB_PATHNAME, JSON.stringify(data, null, 2), {
+    await put(BLOB_PATHNAME, JSON.stringify(data), {
       access: "public",
       contentType: "application/json",
       addRandomSuffix: false,
       allowOverwrite: true,
+      ...blobOpts(),
     });
     return true;
-  } catch {
+  } catch (err) {
+    console.error("Blob write failed:", err);
     return false;
   }
 }
@@ -113,9 +137,9 @@ export async function getStore(): Promise<StoreData> {
 
 export async function updateStore(
   mutator: (current: StoreData) => StoreData | Promise<StoreData>,
-): Promise<StoreData> {
+): Promise<{ data: StoreData; durable: boolean }> {
   return withLock(async () => {
-    let current =
+    const current =
       (await readFromBlob()) ??
       (await readFromFile()) ??
       structuredClone(memoryGet());
@@ -124,15 +148,26 @@ export async function updateStore(
     memorySet(next);
 
     const wroteBlob = await writeToBlob(next);
-    if (!wroteBlob) {
-      await writeToFile(next);
+    if (wroteBlob) {
+      return { data: structuredClone(next), durable: true };
     }
-    return structuredClone(next);
+
+    const wroteFile = await writeToFile(next);
+    if (wroteFile) {
+      return { data: structuredClone(next), durable: true };
+    }
+
+    if (process.env.VERCEL) {
+      throw new Error(
+        "Could not persist data. Blob storage is unavailable on this deployment.",
+      );
+    }
+
+    return { data: structuredClone(next), durable: false };
   });
 }
 
 export function persistenceMode(): "blob" | "file" | "memory" {
-  if (hasBlobToken()) return "blob";
-  if (process.env.VERCEL) return "memory";
+  if (blobToken() || process.env.VERCEL) return "blob";
   return "file";
 }

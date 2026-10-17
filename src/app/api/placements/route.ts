@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
+import { connection } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
 import { distanceMeters, pointInCircle } from "@/lib/geo";
 import { getStore, updateStore } from "@/lib/store";
@@ -10,8 +11,10 @@ import {
 } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  await connection();
   const { searchParams } = new URL(request.url);
   const lat = Number(searchParams.get("lat"));
   const lng = Number(searchParams.get("lng"));
@@ -37,6 +40,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  await connection();
   const body = (await request.json().catch(() => null)) as {
     emoji?: string;
     label?: string;
@@ -104,10 +108,22 @@ export async function POST(request: Request) {
     byAdmin: admin,
   };
 
-  await updateStore((current) => ({
-    ...current,
-    placements: [placement, ...current.placements].slice(0, 500),
-  }));
+  try {
+    await updateStore((current) => ({
+      ...current,
+      placements: [placement, ...current.placements].slice(0, 500),
+    }));
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to persist placement",
+      },
+      { status: 503 },
+    );
+  }
 
   return NextResponse.json({ placement }, { status: 201 });
 }
@@ -123,10 +139,20 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
   }
 
-  await updateStore((current) => ({
-    ...current,
-    placements: current.placements.filter((p) => p.id !== id),
-  }));
+  try {
+    await updateStore((current) => ({
+      ...current,
+      placements: current.placements.filter((p) => p.id !== id),
+    }));
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error:
+          err instanceof Error ? err.message : "Failed to persist delete",
+      },
+      { status: 503 },
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }

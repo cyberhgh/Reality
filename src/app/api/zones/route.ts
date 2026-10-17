@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
+import { connection } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
 import { getStore, updateStore } from "@/lib/store";
 import type { BanZone } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
+  await connection();
   const store = await getStore();
   return NextResponse.json({ zones: store.zones });
 }
 
 export async function POST(request: Request) {
+  await connection();
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "Admin only" }, { status: 401 });
   }
@@ -51,10 +55,20 @@ export async function POST(request: Request) {
     createdAt: new Date().toISOString(),
   };
 
-  await updateStore((current) => ({
-    ...current,
-    zones: [zone, ...current.zones].slice(0, 200),
-  }));
+  try {
+    await updateStore((current) => ({
+      ...current,
+      zones: [zone, ...current.zones].slice(0, 200),
+    }));
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error:
+          err instanceof Error ? err.message : "Failed to persist zone",
+      },
+      { status: 503 },
+    );
+  }
 
   return NextResponse.json({ zone }, { status: 201 });
 }
@@ -70,10 +84,20 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
   }
 
-  await updateStore((current) => ({
-    ...current,
-    zones: current.zones.filter((z) => z.id !== id),
-  }));
+  try {
+    await updateStore((current) => ({
+      ...current,
+      zones: current.zones.filter((z) => z.id !== id),
+    }));
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error:
+          err instanceof Error ? err.message : "Failed to persist delete",
+      },
+      { status: 503 },
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }

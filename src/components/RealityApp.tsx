@@ -33,6 +33,7 @@ export default function RealityApp() {
   const [zones, setZones] = useState<
     { id: string; name: string; lat: number; lng: number; radiusMeters: number }[]
   >([]);
+  const [persistence, setPersistence] = useState<string | null>(null);
 
   const startCamera = useCallback(async () => {
     try {
@@ -61,7 +62,8 @@ export default function RealityApp() {
   const refreshNearby = useCallback(async () => {
     if (geo.lat == null || geo.lng == null) return;
     const res = await fetch(
-      `/api/placements?lat=${geo.lat}&lng=${geo.lng}&radius=250`,
+      `/api/placements?lat=${geo.lat}&lng=${geo.lng}&radius=250&_=${Date.now()}`,
+      { cache: "no-store" },
     );
     const data = await res.json();
     setNearby(data.placements ?? []);
@@ -76,6 +78,10 @@ export default function RealityApp() {
   useEffect(() => {
     setAdminPin(getAdminPinClient());
     setIsAdmin(Boolean(getAdminPinClient()));
+    void fetch("/api/health")
+      .then((r) => r.json())
+      .then((d) => setPersistence(d.persistence ?? null))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -131,7 +137,15 @@ export default function RealityApp() {
       if (!res.ok) {
         setStatus(data.error ?? "Placement failed");
       } else {
-        setStatus(`Placed ${data.placement.emoji} at your location`);
+        const placed = data.placement as Placement;
+        setNearby((prev) => {
+          const next = [
+            { ...placed, distanceMeters: 0 },
+            ...prev.filter((p) => p.id !== placed.id),
+          ];
+          return next;
+        });
+        setStatus(`Placed ${placed.emoji} at your location`);
         setLabel("");
         await refreshNearby();
       }
@@ -264,6 +278,7 @@ export default function RealityApp() {
             GPS {accuracyLabel}
             {geo.heading != null ? ` · heading ${Math.round(geo.heading)}°` : ""}
             {isAdmin ? " · admin" : ""}
+            {persistence ? ` · store:${persistence}` : ""}
           </p>
         </div>
         <div className="rounded-full bg-black/45 px-3 py-1 text-xs backdrop-blur">
