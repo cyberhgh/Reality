@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { adminHeaders, getDeviceId, getAdminPinClient, setAdminPinClient } from "@/lib/client";
-import { bearingDegrees, distanceMeters, normalizeHeadingDelta } from "@/lib/geo";
+import { bearingDegrees, normalizeHeadingDelta } from "@/lib/geo";
 import { DEFAULT_EMOJIS, PRESENCE_RADIUS_METERS, type Placement } from "@/lib/types";
 import { useGeo } from "@/hooks/useGeo";
 
