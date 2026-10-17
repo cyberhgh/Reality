@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type GeoState = {
   lat: number | null;
@@ -8,9 +8,13 @@ export type GeoState = {
   accuracy: number | null;
   heading: number | null;
   hasCompass: boolean;
+  quality: "searching" | "poor" | "ok" | "good";
+  samples: number;
   error: string | null;
   loading: boolean;
 };
+
+type Sample = { lat: number; lng: number; accuracy: number; t: number };
 
 function headingFromOrientation(e: DeviceOrientationEvent): number | null {
   const webkit = (
@@ -19,15 +23,37 @@ function headingFromOrientation(e: DeviceOrientationEvent): number | null {
   if (typeof webkit === "number" && !Number.isNaN(webkit)) {
     return webkit;
   }
-
-  // Absolute events expose compass degrees via alpha on many Androids.
-  const absolute = (e as DeviceOrientationEvent & { absolute?: boolean })
-    .absolute;
   if (typeof e.alpha === "number" && !Number.isNaN(e.alpha)) {
-    if (absolute) return (360 - e.alpha) % 360;
     return (360 - e.alpha) % 360;
   }
   return null;
+}
+
+function qualityFromAccuracy(accuracy: number | null): GeoState["quality"] {
+  if (accuracy == null) return "searching";
+  if (accuracy <= 12) return "good";
+  if (accuracy <= 30) return "ok";
+  return "poor";
+}
+
+/** Inverse-accuracy weighted average of recent samples. */
+function blend(samples: Sample[]): { lat: number; lng: number; accuracy: number } {
+  let wLat = 0;
+  let wLng = 0;
+  let wSum = 0;
+  let bestAcc = Infinity;
+  for (const s of samples) {
+    const w = 1 / Math.max(s.accuracy, 3);
+    wLat += s.lat * w;
+    wLng += s.lng * w;
+    wSum += w;
+    bestAcc = Math.min(bestAcc, s.accuracy);
+  }
+  return {
+    lat: wLat / wSum,
+    lng: wLng / wSum,
+    accuracy: bestAcc,
+  };
 }
 
 export function useGeo() {
@@ -37,24 +63,66 @@ export function useGeo() {
     accuracy: null,
     heading: null,
     hasCompass: false,
+    quality: "searching",
+    samples: 0,
     error: null,
     loading: true,
   });
+  const samplesRef = useRef<Sample[]>([]);
 
   const applyPosition = useCallback((pos: GeolocationPosition) => {
-    setState((prev) => ({
-      ...prev,
+    const accuracy = pos.coords.accuracy;
+    const now = Date.now();
+
+    // Ignore clearly useless fixes (indoors / cold start spikes).
+    if (!Number.isFinite(accuracy) || accuracy > 250) {
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        quality: "poor",
+        error:
+          prev.lat == null
+            ? "Waiting for a clearer GPS fix — step outside if you can."
+            : prev.error,
+      }));
+      return;
+    }
+
+    const nextSample: Sample = {
       lat: pos.coords.latitude,
       lng: pos.coords.longitude,
-      accuracy: pos.coords.accuracy,
+      accuracy,
+      t: now,
+    };
+
+    // Keep recent samples; drop old ones and worse outliers.
+    const kept = samplesRef.current
+      .filter((s) => now - s.t < 15000)
+      .filter((s) => s.accuracy <= accuracy * 2.5 + 15);
+    kept.push(nextSample);
+    kept.sort((a, b) => a.accuracy - b.accuracy);
+    samplesRef.current = kept.slice(0, 8);
+
+    const blended = blend(samplesRef.current);
+
+    setState((prev) => ({
+      ...prev,
+      lat: blended.lat,
+      lng: blended.lng,
+      accuracy: blended.accuracy,
+      samples: samplesRef.current.length,
+      quality: qualityFromAccuracy(blended.accuracy),
       heading:
         pos.coords.heading != null &&
         !Number.isNaN(pos.coords.heading) &&
         pos.coords.speed != null &&
-        pos.coords.speed > 0.5
+        pos.coords.speed > 0.8
           ? pos.coords.heading
           : prev.heading,
-      error: null,
+      error:
+        blended.accuracy > 40
+          ? "GPS is coarse right now — move outdoors and hold still a few seconds."
+          : null,
       loading: false,
     }));
   }, []);
@@ -69,6 +137,13 @@ export function useGeo() {
       return;
     }
 
+    // Kick a fresh high-accuracy read, then watch continuously.
+    navigator.geolocation.getCurrentPosition(applyPosition, () => undefined, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 20000,
+    });
+
     const watchId = navigator.geolocation.watchPosition(
       applyPosition,
       (err) => {
@@ -78,7 +153,7 @@ export function useGeo() {
           error: err.message || "Location permission denied.",
         }));
       },
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
     );
 
     const onOrient = (e: DeviceOrientationEvent) => {
@@ -116,13 +191,13 @@ export function useGeo() {
           setState((s) => ({
             ...s,
             error:
-              "Motion/compass permission denied. Objects will still appear when very close.",
+              "Motion/compass permission denied. Enable it for turn guidance.",
           }));
         }
       } catch {
         setState((s) => ({
           ...s,
-          error: "Could not enable compass. Close objects will still show.",
+          error: "Could not enable compass on this browser.",
         }));
       }
     }

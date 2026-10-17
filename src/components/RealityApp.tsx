@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { adminHeaders, getDeviceId, getAdminPinClient, setAdminPinClient } from "@/lib/client";
-import { bearingDegrees, normalizeHeadingDelta } from "@/lib/geo";
+import { bearingDegrees, distanceMeters, normalizeHeadingDelta } from "@/lib/geo";
 import { DEFAULT_EMOJIS, PRESENCE_RADIUS_METERS, type Placement } from "@/lib/types";
 import { useGeo } from "@/hooks/useGeo";
 
@@ -14,7 +14,10 @@ type Overlay = NearbyPlacement & {
   scale: number;
   visible: boolean;
   mode: "ar" | "here" | "billboard";
+  turnDelta: number | null;
 };
+
+const MAX_PLACE_ACCURACY_M = 35;
 
 export default function RealityApp() {
   const geo = useGeo();
@@ -68,7 +71,16 @@ export default function RealityApp() {
       { cache: "no-store" },
     );
     const data = await res.json();
-    setNearby(data.placements ?? []);
+    const rows = (data.placements ?? []) as NearbyPlacement[];
+    // Recompute distance from the smoothed client GPS fix.
+    setNearby(
+      rows
+        .map((p) => ({
+          ...p,
+          distanceMeters: distanceMeters(geo.lat!, geo.lng!, p.lat, p.lng),
+        }))
+        .sort((a, b) => a.distanceMeters - b.distanceMeters),
+    );
   }, [geo.lat, geo.lng]);
 
   const refreshZones = useCallback(async () => {
@@ -95,76 +107,85 @@ export default function RealityApp() {
     return () => clearInterval(id);
   }, [refreshNearby, refreshZones]);
 
+  const selected = useMemo(
+    () => nearby.find((p) => p.id === selectedId) ?? null,
+    [nearby, selectedId],
+  );
+
   const overlays: Overlay[] = useMemo(() => {
     if (geo.lat == null || geo.lng == null) return [];
 
-    // Focus mode: only the list-selected object (plus anything underfoot).
-    const sorted = [...nearby]
-      .filter((p) => {
-        if (selectedId) {
-          return p.id === selectedId || p.distanceMeters < 12;
-        }
-        // Browse mode: avoid stacking every nearby marker.
-        return p.distanceMeters < 80;
-      })
-      .sort((a, b) => a.distanceMeters - b.distanceMeters);
+    // Focus mode: ONLY the selected object — never stack other nearby markers.
+    const candidates = selectedId
+      ? nearby.filter((p) => p.id === selectedId)
+      : nearby.filter((p) => p.distanceMeters < 60).slice(0, 3);
 
-    return sorted.map((p, index) => {
+    return candidates.map((p, index) => {
       const dist = Math.max(p.distanceMeters, 0);
-      const isSelected = selectedId === p.id;
+      const bearing = bearingDegrees(geo.lat!, geo.lng!, p.lat, p.lng);
+      const turnDelta =
+        geo.heading != null
+          ? normalizeHeadingDelta(bearing - geo.heading)
+          : null;
 
-      // At your feet / GPS noise range: always pin center (bearing is meaningless).
-      if (dist < 12) {
+      if (dist < 15) {
         return {
           ...p,
           xPercent: 50,
-          yPercent: 42,
-          scale: Math.max(1.2, Math.min(2.6, 2.4 - dist / 20)),
+          yPercent: 40,
+          scale: 2,
           visible: true,
           mode: "here" as const,
+          turnDelta,
         };
       }
 
-      // No compass yet: one focused marker, or a short stack in browse mode.
-      if (!geo.hasCompass || geo.heading == null) {
+      if (turnDelta == null) {
         return {
           ...p,
           xPercent: 50,
-          yPercent: selectedId ? 40 : 28 + index * 12,
-          scale: Math.max(0.85, Math.min(1.8, 14 / Math.sqrt(dist))),
-          visible: selectedId ? isSelected : index < 3,
+          yPercent: selectedId ? 36 : 26 + index * 14,
+          scale: 1.4,
+          visible: true,
           mode: "billboard" as const,
+          turnDelta,
         };
       }
 
-      const bearing = bearingDegrees(geo.lat!, geo.lng!, p.lat, p.lng);
-      const delta = normalizeHeadingDelta(bearing - geo.heading);
-      const fov = 75;
-      const inView = Math.abs(delta) <= fov / 2;
+      const fov = 70;
+      const inView = Math.abs(turnDelta) <= fov / 2;
       const xPercent = Math.min(
-        92,
-        Math.max(8, 50 + (delta / (fov / 2)) * 42),
+        90,
+        Math.max(10, 50 + (turnDelta / (fov / 2)) * 40),
       );
-      // Closer = lower on screen; farther = toward horizon.
-      const yPercent = Math.min(70, Math.max(28, 68 - Math.min(dist / 3.5, 36)));
-      const scale = Math.max(0.7, Math.min(2.2, 16 / Math.sqrt(dist)));
+      const yPercent = Math.min(68, Math.max(30, 66 - Math.min(dist / 3.5, 34)));
+      const scale = Math.max(0.85, Math.min(2.1, 15 / Math.sqrt(dist)));
 
       return {
         ...p,
-        xPercent: inView ? xPercent : delta < 0 ? 6 : 94,
-        yPercent: inView ? yPercent : 40,
-        scale: inView ? scale : 0.75,
-        // In focus mode always show the selected target (arrows if off-screen).
-        // In browse mode only show what's roughly in front of the camera.
-        visible: selectedId ? isSelected || dist < 12 : inView && index < 5,
+        xPercent: inView ? xPercent : turnDelta < 0 ? 8 : 92,
+        yPercent: inView ? yPercent : 38,
+        scale: inView ? scale : 0.9,
+        visible: true,
         mode: "ar" as const,
+        turnDelta,
       };
     });
-  }, [nearby, geo.lat, geo.lng, geo.heading, geo.hasCompass, selectedId]);
+  }, [nearby, geo.lat, geo.lng, geo.heading, selectedId]);
 
   async function placeHere() {
     if (geo.lat == null || geo.lng == null) {
       setStatus("Waiting for GPS…");
+      return;
+    }
+    if (
+      !isAdmin &&
+      geo.accuracy != null &&
+      geo.accuracy > MAX_PLACE_ACCURACY_M
+    ) {
+      setStatus(
+        `GPS too coarse (±${Math.round(geo.accuracy)}m). Wait for ≤${MAX_PLACE_ACCURACY_M}m outdoors, or use admin PIN.`,
+      );
       return;
     }
     setBusy(true);
@@ -276,7 +297,7 @@ export default function RealityApp() {
 
   function directionHint(p: NearbyPlacement) {
     if (geo.lat == null || geo.lng == null) return "Find in camera";
-    if (p.distanceMeters < 12) return "Look around — it's right here";
+    if (p.distanceMeters < 15) return "Look around — you are on top of it";
     const bearing = bearingDegrees(geo.lat, geo.lng, p.lat, p.lng);
     if (geo.heading == null) {
       const cardinals = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -284,7 +305,7 @@ export default function RealityApp() {
       return `Face ${cardinals[idx]} · ${Math.round(p.distanceMeters)}m`;
     }
     const delta = normalizeHeadingDelta(bearing - geo.heading);
-    if (Math.abs(delta) < 15) return `Straight ahead · ${Math.round(p.distanceMeters)}m`;
+    if (Math.abs(delta) < 12) return `Straight ahead · ${Math.round(p.distanceMeters)}m`;
     if (delta < 0) return `Turn left ${Math.round(Math.abs(delta))}° · ${Math.round(p.distanceMeters)}m`;
     return `Turn right ${Math.round(delta)}° · ${Math.round(p.distanceMeters)}m`;
   }
@@ -297,7 +318,6 @@ export default function RealityApp() {
   function focusPlacement(p: NearbyPlacement) {
     setSelectedId(p.id);
     setStatus(`${p.emoji} ${directionHint(p)}`);
-    setPanel("place");
     if (!cameraReady) {
       void startCamera();
     }
@@ -305,11 +325,13 @@ export default function RealityApp() {
 
   // Keep turn guidance live while a list item is selected.
   useEffect(() => {
-    if (!selectedId) return;
-    const selected = nearby.find((p) => p.id === selectedId);
     if (!selected) return;
     setStatus(`${selected.emoji} ${directionHint(selected)}`);
-  }, [selectedId, nearby, geo.lat, geo.lng, geo.heading, geo.hasCompass]);
+  }, [selected, geo.lat, geo.lng, geo.heading, geo.hasCompass]);
+
+  const focusTurn = selected?.id
+    ? overlays.find((o) => o.id === selected.id)?.turnDelta ?? null
+    : null;
 
   return (
     <div className="relative flex min-h-[100dvh] flex-col bg-[#0b1220] text-white">
@@ -341,7 +363,38 @@ export default function RealityApp() {
           </div>
         )}
 
+        {cameraReady && selected && (
+          <div className="pointer-events-none absolute inset-x-0 top-[22%] z-[6] flex flex-col items-center px-4">
+            <div className="rounded-2xl bg-black/55 px-4 py-3 text-center backdrop-blur-md">
+              <p className="text-4xl leading-none">{selected.emoji}</p>
+              <p className="mt-2 text-sm font-medium">{selected.label}</p>
+              <p className="mt-1 text-xs text-cyan-100">
+                {directionHint(selected)}
+              </p>
+              {focusTurn != null && Math.abs(focusTurn) >= 12 && (
+                <p
+                  className="mt-3 text-5xl text-cyan-300 transition-transform"
+                  style={{ transform: `rotate(${focusTurn}deg)` }}
+                >
+                  ↑
+                </p>
+              )}
+              {focusTurn != null && Math.abs(focusTurn) < 12 && (
+                <p className="mt-3 text-sm font-semibold text-emerald-300">
+                  Ahead of you
+                </p>
+              )}
+              {focusTurn == null && (
+                <p className="mt-3 text-[11px] text-white/70">
+                  Enable compass for live turn arrow
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         {cameraReady &&
+          !selectedId &&
           overlays
             .filter((o) => o.visible)
             .map((o) => (
@@ -354,23 +407,33 @@ export default function RealityApp() {
                   transform: `translate(-50%, -50%) scale(${o.scale})`,
                 }}
               >
-                {o.mode === "ar" && (o.xPercent <= 8 || o.xPercent >= 92) && (
+                {o.mode === "ar" && (o.xPercent <= 10 || o.xPercent >= 90) && (
                   <div className="mb-1 text-lg text-cyan-200">
-                    {o.xPercent <= 8 ? "◀" : "▶"}
+                    {o.xPercent <= 10 ? "◀" : "▶"}
                   </div>
                 )}
-                <div
-                  className={`text-5xl leading-none ${
-                    selectedId === o.id ? "rounded-full ring-4 ring-cyan-300/80" : ""
-                  }`}
-                >
-                  {o.emoji}
-                </div>
+                <div className="text-5xl leading-none">{o.emoji}</div>
                 <div className="mt-1 whitespace-nowrap rounded-full bg-black/65 px-2 py-0.5 text-[10px] text-white/95">
                   {Math.round(o.distanceMeters)}m · {o.label}
-                  {o.mode === "here" ? " · here" : ""}
-                  {selectedId === o.id ? " · selected" : ""}
                 </div>
+              </div>
+            ))}
+
+        {cameraReady &&
+          selectedId &&
+          overlays
+            .filter((o) => o.visible && o.mode === "here")
+            .map((o) => (
+              <div
+                key={o.id}
+                className="pointer-events-none absolute z-[5] text-center"
+                style={{
+                  left: "50%",
+                  top: "58%",
+                  transform: "translate(-50%, -50%) scale(1.8)",
+                }}
+              >
+                <div className="text-6xl leading-none">{o.emoji}</div>
               </div>
             ))}
       </div>
@@ -379,7 +442,8 @@ export default function RealityApp() {
         <div>
           <p className="text-lg font-semibold tracking-tight">Reality</p>
           <p className="text-xs text-white/70">
-            GPS {accuracyLabel}
+            GPS {accuracyLabel} ({geo.quality}
+            {geo.samples > 0 ? ` · ${geo.samples} samples` : ""})
             {geo.hasCompass && geo.heading != null
               ? ` · heading ${Math.round(geo.heading)}°`
               : " · compass off"}
@@ -412,11 +476,11 @@ export default function RealityApp() {
               type="button"
               onClick={() => {
                 setSelectedId(null);
-                setStatus("Showing nearby objects in front of you");
+                setStatus("Showing up to 3 nearby objects ahead");
               }}
               className="mt-1 text-[11px] font-medium text-white/70 underline underline-offset-2"
             >
-              Clear focus · show nearby
+              Clear focus · browse nearby
             </button>
           )}
         </div>
@@ -464,15 +528,15 @@ export default function RealityApp() {
             />
             <button
               type="button"
-              disabled={busy || geo.lat == null}
+              disabled={busy || geo.lat == null || geo.quality === "searching"}
               onClick={() => void placeHere()}
               className="w-full rounded-xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-[#06202b] disabled:opacity-50"
             >
               Place {emoji} here
             </button>
             <p className="text-[11px] leading-relaxed text-white/55">
-              Must be within {PRESENCE_RADIUS_METERS}m of the spot (server-enforced).
-              Admins can bypass. Ban zones always block placements.
+              Best outdoors with clear sky. Placement needs GPS ≤{MAX_PLACE_ACCURACY_M}m
+              (admins exempt). Presence check: {PRESENCE_RADIUS_METERS}m.
             </p>
           </div>
         )}
