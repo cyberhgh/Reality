@@ -88,6 +88,8 @@ export default function RealityApp() {
   const [selectedComments, setSelectedComments] = useState<
     Array<{ id: string; userName: string; text: string }>
   >([]);
+  const [watchingArea, setWatchingArea] = useState(false);
+  const knownNearbyRef = useRef<Set<string>>(new Set());
   const xr = useWebXR();
 
   async function sharePlacement(p: Placement) {
@@ -246,6 +248,7 @@ export default function RealityApp() {
     void refreshDiscover();
     void refreshLeaderboard();
     void refreshMyFinds();
+    setWatchingArea(localStorage.getItem("reality-watch-area") === "1");
     const id = setInterval(() => {
       void refreshNearby();
       void refreshDiscover();
@@ -260,6 +263,27 @@ export default function RealityApp() {
     refreshLeaderboard,
     refreshMyFinds,
   ]);
+
+  // Local "watch this area" — alert when a brand-new nearby drop appears.
+  useEffect(() => {
+    if (!watchingArea || nearby.length === 0) return;
+    const ids = new Set(nearby.map((p) => p.id));
+    if (knownNearbyRef.current.size === 0) {
+      knownNearbyRef.current = ids;
+      return;
+    }
+    const fresh = nearby.filter((p) => !knownNearbyRef.current.has(p.id));
+    knownNearbyRef.current = ids;
+    if (fresh.length > 0) {
+      const p = fresh[0];
+      setStatus(`New nearby drop: ${p.emoji} ${p.label} (${Math.round(p.distanceMeters)}m)`);
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        new Notification("New Reality drop nearby", {
+          body: `${p.emoji} ${p.label}`,
+        });
+      }
+    }
+  }, [nearby, watchingArea]);
 
   const selected = useMemo(
     () => nearby.find((p) => p.id === selectedId) ?? null,
@@ -1200,6 +1224,26 @@ export default function RealityApp() {
                 {r.name} · {r.drops} drops · {r.foundByOthers} found
               </p>
             ))}
+            <label className="flex items-center gap-2 text-[11px] text-white/70">
+              <input
+                type="checkbox"
+                checked={watchingArea}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setWatchingArea(on);
+                  localStorage.setItem("reality-watch-area", on ? "1" : "0");
+                  if (on && typeof Notification !== "undefined") {
+                    void Notification.requestPermission();
+                  }
+                  setStatus(
+                    on
+                      ? "Watching this area for new drops"
+                      : "Area watch off",
+                  );
+                }}
+              />
+              Watch this area for new drops
+            </label>
             <p className="text-[11px] leading-relaxed text-white/45">
               Accuracy stack: GPS blend + compass + step dead-reckoning + manual
               N/E fine-tune + snap QR codes + WebXR when the device supports it.

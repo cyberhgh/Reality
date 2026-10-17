@@ -3,6 +3,32 @@ import { getPlacementById, listFinds, listReactions } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
+async function loadComments(placementId: string) {
+  const { list } = await import("@vercel/blob");
+  if (!process.env.BLOB_READ_WRITE_TOKEN && !process.env.VERCEL) return [];
+  try {
+    const { blobs } = await list({ prefix: "comments/", limit: 500 });
+    const rows = [];
+    for (const blob of blobs) {
+      const res = await fetch(`${blob.url}?v=${Date.now()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) continue;
+      const c = (await res.json()) as {
+        id: string;
+        placementId: string;
+        userName: string;
+        text: string;
+        createdAt: string;
+      };
+      if (c.placementId === placementId) rows.push(c);
+    }
+    return rows.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+  } catch {
+    return [];
+  }
+}
+
 export default async function ObjectPage({
   params,
 }: {
@@ -21,9 +47,10 @@ export default async function ObjectPage({
     );
   }
 
-  const [finds, reactions] = await Promise.all([
+  const [finds, reactions, comments] = await Promise.all([
     listFinds(id),
     listReactions(id),
+    loadComments(id),
   ]);
 
   return (
@@ -92,6 +119,19 @@ export default async function ObjectPage({
             .map((r) => r.emoji)
             .join(" ") || "—"}
         </p>
+      </section>
+      <section className="mt-6">
+        <h2 className="text-sm font-semibold text-white/80">Comments</h2>
+        <ul className="mt-2 space-y-2 text-sm text-white/70">
+          {comments.slice(0, 20).map((c) => (
+            <li key={c.id} className="rounded-xl bg-white/5 px-3 py-2">
+              <span className="text-white/90">{c.userName}</span>: {c.text}
+            </li>
+          ))}
+          {comments.length === 0 && (
+            <li className="text-xs text-white/45">No comments yet.</li>
+          )}
+        </ul>
       </section>
     </main>
   );
