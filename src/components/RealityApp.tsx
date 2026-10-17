@@ -408,6 +408,7 @@ export default function RealityApp() {
           finderName: displayName,
           lat: geo.lat,
           lng: geo.lng,
+          altitude: geo.altitude,
           method,
         }),
       });
@@ -733,6 +734,19 @@ export default function RealityApp() {
               className="rounded-full bg-cyan-400/90 px-3 py-1 text-[11px] font-semibold text-[#06202b]"
             >
               Enable sensors
+            </button>
+          )}
+          {cameraReady && geo.hasCompass && (
+            <button
+              type="button"
+              onClick={() =>
+                setStatus(
+                  "Calibrate compass: wave your phone in a figure-8 away from metal/magnets.",
+                )
+              }
+              className="rounded-full bg-white/15 px-3 py-1 text-[11px]"
+            >
+              Calibrate
             </button>
           )}
         </div>

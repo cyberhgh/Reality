@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { connection } from "next/server";
-import { distanceMeters } from "@/lib/geo";
+import { distance3DMeters } from "@/lib/geo";
 import {
   addFind,
   getPlacementById,
@@ -32,6 +32,7 @@ export async function POST(request: Request) {
     finderName?: string;
     lat?: number;
     lng?: number;
+    altitude?: number | null;
     method?: "gps" | "snap" | "manual";
   } | null;
 
@@ -52,6 +53,10 @@ export async function POST(request: Request) {
 
   const lat = Number(body.lat);
   const lng = Number(body.lng);
+  const altitude =
+    body.altitude != null && Number.isFinite(Number(body.altitude))
+      ? Number(body.altitude)
+      : null;
   const finderId = (body.finderId ?? "anonymous").slice(0, 40);
   const finderName = (body.finderName ?? "Explorer").slice(0, 24);
 
@@ -62,7 +67,14 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const dist = distanceMeters(lat, lng, placement.lat, placement.lng);
+    const dist = distance3DMeters(
+      lat,
+      lng,
+      placement.lat,
+      placement.lng,
+      altitude,
+      placement.altitude,
+    );
     if (dist > FIND_RADIUS_METERS) {
       return NextResponse.json(
         {

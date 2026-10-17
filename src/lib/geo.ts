@@ -81,3 +81,25 @@ export function makeSnapCode() {
   for (const b of bytes) out += alphabet[b % alphabet.length];
   return out;
 }
+
+/** 3D distance using optional altitudes (meters). Falls back to ground distance. */
+export function distance3DMeters(
+  aLat: number,
+  aLng: number,
+  bLat: number,
+  bLng: number,
+  aAlt?: number | null,
+  bAlt?: number | null,
+) {
+  const ground = distanceMeters(aLat, aLng, bLat, bLng);
+  if (
+    aAlt == null ||
+    bAlt == null ||
+    !Number.isFinite(aAlt) ||
+    !Number.isFinite(bAlt)
+  ) {
+    return ground;
+  }
+  const dAlt = aAlt - bAlt;
+  return Math.sqrt(ground * ground + dAlt * dAlt);
+}
