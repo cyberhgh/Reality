@@ -98,13 +98,20 @@ export default function RealityApp() {
   const overlays: Overlay[] = useMemo(() => {
     if (geo.lat == null || geo.lng == null) return [];
 
-    // Closest-first so near objects get stable screen slots.
-    const sorted = [...nearby].sort(
-      (a, b) => a.distanceMeters - b.distanceMeters,
-    );
+    // Focus mode: only the list-selected object (plus anything underfoot).
+    const sorted = [...nearby]
+      .filter((p) => {
+        if (selectedId) {
+          return p.id === selectedId || p.distanceMeters < 12;
+        }
+        // Browse mode: avoid stacking every nearby marker.
+        return p.distanceMeters < 80;
+      })
+      .sort((a, b) => a.distanceMeters - b.distanceMeters);
 
     return sorted.map((p, index) => {
       const dist = Math.max(p.distanceMeters, 0);
+      const isSelected = selectedId === p.id;
 
       // At your feet / GPS noise range: always pin center (bearing is meaningless).
       if (dist < 12) {
@@ -118,14 +125,14 @@ export default function RealityApp() {
         };
       }
 
-      // No compass yet: show a readable billboard stack instead of FOV-culling to empty.
+      // No compass yet: one focused marker, or a short stack in browse mode.
       if (!geo.hasCompass || geo.heading == null) {
         return {
           ...p,
           xPercent: 50,
-          yPercent: 28 + index * 12,
+          yPercent: selectedId ? 40 : 28 + index * 12,
           scale: Math.max(0.85, Math.min(1.8, 14 / Math.sqrt(dist))),
-          visible: index < 4,
+          visible: selectedId ? isSelected : index < 3,
           mode: "billboard" as const,
         };
       }
@@ -147,11 +154,13 @@ export default function RealityApp() {
         xPercent: inView ? xPercent : delta < 0 ? 6 : 94,
         yPercent: inView ? yPercent : 40,
         scale: inView ? scale : 0.75,
-        visible: true,
+        // In focus mode always show the selected target (arrows if off-screen).
+        // In browse mode only show what's roughly in front of the camera.
+        visible: selectedId ? isSelected || dist < 12 : inView && index < 5,
         mode: "ar" as const,
       };
     });
-  }, [nearby, geo.lat, geo.lng, geo.heading, geo.hasCompass]);
+  }, [nearby, geo.lat, geo.lng, geo.heading, geo.hasCompass, selectedId]);
 
   async function placeHere() {
     if (geo.lat == null || geo.lng == null) {
@@ -288,10 +297,19 @@ export default function RealityApp() {
   function focusPlacement(p: NearbyPlacement) {
     setSelectedId(p.id);
     setStatus(`${p.emoji} ${directionHint(p)}`);
+    setPanel("place");
     if (!cameraReady) {
       void startCamera();
     }
   }
+
+  // Keep turn guidance live while a list item is selected.
+  useEffect(() => {
+    if (!selectedId) return;
+    const selected = nearby.find((p) => p.id === selectedId);
+    if (!selected) return;
+    setStatus(`${selected.emoji} ${directionHint(selected)}`);
+  }, [selectedId, nearby, geo.lat, geo.lng, geo.heading, geo.hasCompass]);
 
   return (
     <div className="relative flex min-h-[100dvh] flex-col bg-[#0b1220] text-white">
@@ -385,10 +403,22 @@ export default function RealityApp() {
         </div>
       </header>
 
-      {(geo.error || status) && (
+      {(geo.error || status || selectedId) && (
         <div className="relative z-10 mx-4 rounded-xl bg-black/55 px-3 py-2 text-xs backdrop-blur">
           {geo.error && <p className="text-amber-200">{geo.error}</p>}
           {status && <p className="text-cyan-100">{status}</p>}
+          {selectedId && (
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedId(null);
+                setStatus("Showing nearby objects in front of you");
+              }}
+              className="mt-1 text-[11px] font-medium text-white/70 underline underline-offset-2"
+            >
+              Clear focus · show nearby
+            </button>
+          )}
         </div>
       )}
 
