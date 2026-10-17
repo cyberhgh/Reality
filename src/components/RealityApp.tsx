@@ -80,6 +80,9 @@ export default function RealityApp() {
     topDroppers: Array<{ name: string; drops: number; foundByOthers: number }>;
   } | null>(null);
   const [hideFound, setHideFound] = useState(true);
+  const [myFinds, setMyFinds] = useState<
+    Array<{ placementId: string; method: string; createdAt: string }>
+  >([]);
   const xr = useWebXR();
 
   async function sharePlacement(p: Placement) {
@@ -186,6 +189,33 @@ export default function RealityApp() {
     setLeaderboard(await res.json());
   }, []);
 
+  const refreshMyFinds = useCallback(async () => {
+    const res = await fetch(`/api/finds?_=${Date.now()}`, { cache: "no-store" });
+    const data = await res.json();
+    const mine = ((data.finds ?? []) as Array<{
+      finderId: string;
+      placementId: string;
+      method: string;
+      createdAt: string;
+    }>).filter((f) => f.finderId === getDeviceId());
+    setMyFinds(mine);
+  }, []);
+
+  async function reportPlacement(placementId: string) {
+    const reason = window.prompt("Why report this drop?")?.trim();
+    if (!reason) return;
+    const res = await fetch("/api/reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        placementId,
+        reporterId: getDeviceId(),
+        reason,
+      }),
+    });
+    setStatus(res.ok ? "Report submitted" : "Could not submit report");
+  }
+
   useEffect(() => {
     const name = getDisplayName();
     setDisplayNameState(name);
@@ -210,13 +240,21 @@ export default function RealityApp() {
     void refreshZones();
     void refreshDiscover();
     void refreshLeaderboard();
+    void refreshMyFinds();
     const id = setInterval(() => {
       void refreshNearby();
       void refreshDiscover();
       void refreshLeaderboard();
+      void refreshMyFinds();
     }, 8000);
     return () => clearInterval(id);
-  }, [refreshNearby, refreshZones, refreshDiscover, refreshLeaderboard]);
+  }, [
+    refreshNearby,
+    refreshZones,
+    refreshDiscover,
+    refreshLeaderboard,
+    refreshMyFinds,
+  ]);
 
   const selected = useMemo(
     () => nearby.find((p) => p.id === selectedId) ?? null,
@@ -381,6 +419,7 @@ export default function RealityApp() {
         );
         await refreshNearby();
         await refreshDiscover();
+        await refreshMyFinds();
       }
     } finally {
       setBusy(false);
@@ -996,6 +1035,13 @@ export default function RealityApp() {
                   >
                     Maps
                   </a>
+                  <button
+                    type="button"
+                    onClick={() => void reportPlacement(p.id)}
+                    className="text-[11px] text-amber-200"
+                  >
+                    Report
+                  </button>
                   {isAdmin && (
                     <button
                       type="button"
@@ -1029,8 +1075,23 @@ export default function RealityApp() {
               Update name
             </button>
             <p className="text-xs text-white/60">
-              Your finds: {foundIds.length}
+              Your finds: {myFinds.length} (device) / {foundIds.length} (local)
             </p>
+            <p className="text-xs font-semibold text-white/80">Your collection</p>
+            {myFinds.slice(0, 8).map((f) => (
+              <a
+                key={f.placementId + f.createdAt}
+                href={`/o/${f.placementId}`}
+                className="block text-[11px] text-cyan-200 underline"
+              >
+                {f.method} find · {new Date(f.createdAt).toLocaleString()}
+              </a>
+            ))}
+            {myFinds.length === 0 && (
+              <p className="text-[11px] text-white/45">
+                No finds yet — hunt nearby drops or redeem a snap code.
+              </p>
+            )}
             <p className="text-xs font-semibold text-white/80">Top finders</p>
             {(leaderboard?.topFinders ?? []).slice(0, 5).map((r) => (
               <p key={r.name + r.finds} className="text-[11px] text-white/65">

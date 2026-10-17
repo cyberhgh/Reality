@@ -1,50 +1,36 @@
-# Reality (MVP)
+# Reality
 
-Mobile web proof-of-concept: place digital emoji-objects at real-world GPS coordinates, then view them through your phone camera when you are nearby.
+Social geo layer: members drop digital objects in the real world for others to find, react to, and share.
 
-## What works in this MVP
+## Live
 
-- Open on a phone browser (no App Store / Play install)
-- Camera + GPS + compass-based AR overlay of nearby objects
-- Place an object at your current location (server checks you are within ~40m)
-- Admin PIN bypasses the presence check
-- Admin can create circular **no-placement zones** that block everyone
-- Nearby list + remove (admin)
+https://reality-geo-mvp.vercel.app
 
-This is **not** Unity / ARKit Geospatial yet — it is a GPS + heading overlay PoC you can test outdoors today.
+## Core loop
 
-## Quick start (local)
+1. Pick a display name
+2. Drop an object at your location (optional fine-tune + landmark photo + snap QR)
+3. Others discover it nearby, follow turn guidance, mark **Found**, react, share
+
+## Accuracy stack (beyond raw GPS)
+
+- High-accuracy GPS with sample blending
+- Compass heading for AR guidance
+- Step-based dead reckoning between GPS fixes
+- Manual N/E fine-tune (± meters) at drop time
+- Snap codes + QR (strongest non-GPS lock when posted on-site)
+- Optional WebXR hit-test probe when the device supports it
+- Landmark photos to help visual recognition
+
+## Admin
+
+Default PIN: `reality-admin` (override with `ADMIN_PIN`)
+
+## Local
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` on your computer.
-
-For a **real phone**, use HTTPS (camera/GPS require it on iOS):
-
-1. Deploy to Vercel (recommended), or
-2. Tunnel: `npx localtunnel --port 3000` / Cloudflare Tunnel / ngrok
-
-## Admin
-
-Default PIN: `reality-admin`  
-Override with env `ADMIN_PIN`.
-
-Enter the PIN under the **admin** tab on your device.
-
-## Persistence
-
-| Environment | Behavior |
-|-------------|----------|
-| Local | `data/store.json` |
-| Vercel + `BLOB_READ_WRITE_TOKEN` | Durable Vercel Blob JSON |
-| Vercel without Blob | In-memory (can reset on cold starts) |
-
-## Notes for testers
-
-- Use outdoors with clear GPS
-- Allow camera, location, and motion/orientation permissions
-- Point the rear camera and slowly rotate to find nearby objects
-- Accuracy of overlay depends on phone compass quality
+Phone testing needs HTTPS (Vercel deploy or a tunnel).

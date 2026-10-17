@@ -45,3 +45,4 @@ next-env.d.ts
 data/store.json
 data/finds.json
 data/reactions.json
+data/reports.json
