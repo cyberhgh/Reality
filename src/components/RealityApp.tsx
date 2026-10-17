@@ -27,6 +27,7 @@ import {
 } from "@/lib/types";
 import { useGeo } from "@/hooks/useGeo";
 import { useWebXR } from "@/hooks/useWebXR";
+import Radar from "@/components/Radar";
 
 type NearbyPlacement = Placement & { distanceMeters: number };
 
@@ -651,8 +652,20 @@ export default function RealityApp() {
           </div>
         )}
 
+        {cameraReady && geo.lat != null && geo.lng != null && (
+          <div className="pointer-events-none absolute right-3 top-[18%] z-[6]">
+            <Radar
+              userLat={geo.lat}
+              userLng={geo.lng}
+              heading={geo.heading}
+              selectedId={selectedId}
+              items={nearby}
+            />
+          </div>
+        )}
+
         {cameraReady && selected && (
-          <div className="pointer-events-none absolute inset-x-0 top-[18%] z-[6] flex flex-col items-center px-4">
+          <div className="pointer-events-none absolute inset-x-0 top-[18%] z-[6] flex flex-col items-center px-4 pr-32">
             <div className="rounded-2xl bg-black/60 px-4 py-3 text-center backdrop-blur-md">
               <p className="text-4xl leading-none">{selected.emoji}</p>
               <p className="mt-2 text-sm font-medium">{selected.label}</p>
