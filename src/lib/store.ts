@@ -1,12 +1,20 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { put, list, del } from "@vercel/blob";
-import type { BanZone, Placement, StoreData } from "./types";
+import type {
+  BanZone,
+  FindEvent,
+  Placement,
+  Reaction,
+  StoreData,
+} from "./types";
 
 const EMPTY: StoreData = { placements: [], zones: [] };
 const LOCAL_PATH = path.join(process.cwd(), "data", "store.json");
 const PLACEMENT_PREFIX = "placements/";
 const ZONE_PREFIX = "zones/";
+const FIND_PREFIX = "finds/";
+const REACTION_PREFIX = "reactions/";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -37,6 +45,25 @@ function blobOpts() {
   return token ? { token } : {};
 }
 
+export function normalizePlacement(raw: Partial<Placement> & { id: string }): Placement {
+  return {
+    id: raw.id,
+    emoji: raw.emoji ?? "🗿",
+    label: raw.label ?? "Untitled",
+    note: raw.note ?? "",
+    lat: Number(raw.lat),
+    lng: Number(raw.lng),
+    altitude: raw.altitude ?? null,
+    createdAt: raw.createdAt ?? new Date().toISOString(),
+    createdBy: raw.createdBy ?? "anonymous",
+    createdByName: raw.createdByName ?? "Explorer",
+    byAdmin: Boolean(raw.byAdmin),
+    snapCode: raw.snapCode ?? raw.id.slice(0, 6).toUpperCase(),
+    findCount: Number(raw.findCount ?? 0),
+    reactionCount: Number(raw.reactionCount ?? 0),
+  };
+}
+
 async function fetchJson<T>(url: string): Promise<T | null> {
   const bust = url.includes("?") ? `&v=${Date.now()}` : `?v=${Date.now()}`;
   const res = await fetch(`${url}${bust}`, {
@@ -61,29 +88,22 @@ async function listJsonPrefix<T>(prefix: string): Promise<T[]> {
 async function readFromBlob(): Promise<StoreData | null> {
   if (!blobEnabled()) return null;
   try {
-    const [placements, zones] = await Promise.all([
-      listJsonPrefix<Placement>(PLACEMENT_PREFIX),
+    const [placementsRaw, zones] = await Promise.all([
+      listJsonPrefix<Partial<Placement> & { id: string }>(PLACEMENT_PREFIX),
       listJsonPrefix<BanZone>(ZONE_PREFIX),
     ]);
-    return { placements, zones };
+    return {
+      placements: placementsRaw.map(normalizePlacement),
+      zones,
+    };
   } catch (err) {
     console.error("Blob read failed:", err);
     return null;
   }
 }
 
-async function putPlacementBlob(placement: Placement) {
-  await put(`${PLACEMENT_PREFIX}${placement.id}.json`, JSON.stringify(placement), {
-    access: "public",
-    contentType: "application/json",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    ...blobOpts(),
-  });
-}
-
-async function putZoneBlob(zone: BanZone) {
-  await put(`${ZONE_PREFIX}${zone.id}.json`, JSON.stringify(zone), {
+async function putJson(pathname: string, data: unknown) {
+  await put(pathname, JSON.stringify(data), {
     access: "public",
     contentType: "application/json",
     addRandomSuffix: false,
@@ -102,7 +122,13 @@ async function deleteBlobByPrefix(prefix: string, id: string) {
 async function readFromFile(): Promise<StoreData | null> {
   try {
     const raw = await fs.readFile(LOCAL_PATH, "utf8");
-    return JSON.parse(raw) as StoreData;
+    const parsed = JSON.parse(raw) as StoreData;
+    return {
+      placements: (parsed.placements ?? []).map((p) =>
+        normalizePlacement(p as Placement),
+      ),
+      zones: parsed.zones ?? [],
+    };
   } catch {
     return null;
   }
@@ -132,12 +158,29 @@ export async function getStore(): Promise<StoreData> {
   return structuredClone(memoryGet());
 }
 
+export async function getPlacementById(id: string): Promise<Placement | null> {
+  const store = await getStore();
+  return store.placements.find((p) => p.id === id) ?? null;
+}
+
+export async function getPlacementBySnapCode(
+  code: string,
+): Promise<Placement | null> {
+  const store = await getStore();
+  const needle = code.trim().toUpperCase();
+  return store.placements.find((p) => p.snapCode === needle) ?? null;
+}
+
 export async function addPlacement(placement: Placement): Promise<void> {
+  const normalized = normalizePlacement(placement);
   if (blobEnabled()) {
     try {
-      await putPlacementBlob(placement);
+      await putJson(`${PLACEMENT_PREFIX}${normalized.id}.json`, normalized);
       const mem = memoryGet();
-      mem.placements = [placement, ...mem.placements.filter((p) => p.id !== placement.id)];
+      mem.placements = [
+        normalized,
+        ...mem.placements.filter((p) => p.id !== normalized.id),
+      ];
       return;
     } catch (err) {
       console.error("Blob placement write failed:", err);
@@ -146,12 +189,19 @@ export async function addPlacement(placement: Placement): Promise<void> {
   }
 
   const current = (await readFromFile()) ?? structuredClone(memoryGet());
-  current.placements = [placement, ...current.placements.filter((p) => p.id !== placement.id)].slice(0, 500);
+  current.placements = [
+    normalized,
+    ...current.placements.filter((p) => p.id !== normalized.id),
+  ].slice(0, 500);
   memorySet(current);
   const ok = await writeToFile(current);
   if (!ok && process.env.VERCEL) {
     throw new Error("Could not persist placement.");
   }
+}
+
+export async function updatePlacement(placement: Placement): Promise<void> {
+  await addPlacement(normalizePlacement(placement));
 }
 
 export async function removePlacement(id: string): Promise<void> {
@@ -176,7 +226,7 @@ export async function removePlacement(id: string): Promise<void> {
 export async function addZone(zone: BanZone): Promise<void> {
   if (blobEnabled()) {
     try {
-      await putZoneBlob(zone);
+      await putJson(`${ZONE_PREFIX}${zone.id}.json`, zone);
       const mem = memoryGet();
       mem.zones = [zone, ...mem.zones.filter((z) => z.id !== zone.id)];
       return;
@@ -187,7 +237,10 @@ export async function addZone(zone: BanZone): Promise<void> {
   }
 
   const current = (await readFromFile()) ?? structuredClone(memoryGet());
-  current.zones = [zone, ...current.zones.filter((z) => z.id !== zone.id)].slice(0, 200);
+  current.zones = [zone, ...current.zones.filter((z) => z.id !== zone.id)].slice(
+    0,
+    200,
+  );
   memorySet(current);
   const ok = await writeToFile(current);
   if (!ok && process.env.VERCEL) {
@@ -212,6 +265,91 @@ export async function removeZone(id: string): Promise<void> {
   current.zones = current.zones.filter((z) => z.id !== id);
   memorySet(current);
   await writeToFile(current);
+}
+
+export async function addFind(find: FindEvent): Promise<void> {
+  if (blobEnabled()) {
+    await putJson(`${FIND_PREFIX}${find.id}.json`, find);
+    return;
+  }
+  // Local fallback: stash on placement via memory only file sidecar
+  const findsPath = path.join(process.cwd(), "data", "finds.json");
+  let finds: FindEvent[] = [];
+  try {
+    finds = JSON.parse(await fs.readFile(findsPath, "utf8")) as FindEvent[];
+  } catch {
+    finds = [];
+  }
+  finds = [find, ...finds].slice(0, 2000);
+  await fs.mkdir(path.dirname(findsPath), { recursive: true });
+  await fs.writeFile(findsPath, JSON.stringify(finds, null, 2), "utf8");
+}
+
+export async function listFinds(placementId?: string): Promise<FindEvent[]> {
+  if (blobEnabled()) {
+    const all = await listJsonPrefix<FindEvent>(FIND_PREFIX);
+    return placementId
+      ? all.filter((f) => f.placementId === placementId)
+      : all;
+  }
+  const findsPath = path.join(process.cwd(), "data", "finds.json");
+  try {
+    const finds = JSON.parse(await fs.readFile(findsPath, "utf8")) as FindEvent[];
+    return placementId
+      ? finds.filter((f) => f.placementId === placementId)
+      : finds;
+  } catch {
+    return [];
+  }
+}
+
+export async function addReaction(reaction: Reaction): Promise<void> {
+  if (blobEnabled()) {
+    await putJson(`${REACTION_PREFIX}${reaction.id}.json`, reaction);
+    return;
+  }
+  const reactionsPath = path.join(process.cwd(), "data", "reactions.json");
+  let reactions: Reaction[] = [];
+  try {
+    reactions = JSON.parse(
+      await fs.readFile(reactionsPath, "utf8"),
+    ) as Reaction[];
+  } catch {
+    reactions = [];
+  }
+  reactions = [
+    reaction,
+    ...reactions.filter(
+      (r) =>
+        !(
+          r.placementId === reaction.placementId &&
+          r.userId === reaction.userId &&
+          r.emoji === reaction.emoji
+        ),
+    ),
+  ].slice(0, 5000);
+  await fs.mkdir(path.dirname(reactionsPath), { recursive: true });
+  await fs.writeFile(reactionsPath, JSON.stringify(reactions, null, 2), "utf8");
+}
+
+export async function listReactions(placementId?: string): Promise<Reaction[]> {
+  if (blobEnabled()) {
+    const all = await listJsonPrefix<Reaction>(REACTION_PREFIX);
+    return placementId
+      ? all.filter((r) => r.placementId === placementId)
+      : all;
+  }
+  const reactionsPath = path.join(process.cwd(), "data", "reactions.json");
+  try {
+    const reactions = JSON.parse(
+      await fs.readFile(reactionsPath, "utf8"),
+    ) as Reaction[];
+    return placementId
+      ? reactions.filter((r) => r.placementId === placementId)
+      : reactions;
+  } catch {
+    return [];
+  }
 }
 
 export function persistenceMode(): "blob" | "file" | "memory" {

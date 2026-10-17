@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { connection } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
-import { distanceMeters, pointInCircle } from "@/lib/geo";
+import { distanceMeters, makeSnapCode, pointInCircle } from "@/lib/geo";
 import {
   addPlacement,
   getStore,
@@ -23,6 +23,16 @@ export async function GET(request: Request) {
   const lat = Number(searchParams.get("lat"));
   const lng = Number(searchParams.get("lng"));
   const radius = Number(searchParams.get("radius") ?? NEARBY_RADIUS_METERS);
+  const all = searchParams.get("all") === "1";
+
+  const store = await getStore();
+
+  if (all) {
+    const placements = [...store.placements].sort(
+      (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt),
+    );
+    return NextResponse.json({ placements });
+  }
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     return NextResponse.json(
@@ -31,7 +41,6 @@ export async function GET(request: Request) {
     );
   }
 
-  const store = await getStore();
   const nearby = store.placements
     .map((p) => ({
       ...p,
@@ -48,11 +57,14 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as {
     emoji?: string;
     label?: string;
+    note?: string;
     lat?: number;
     lng?: number;
+    altitude?: number | null;
     userLat?: number;
     userLng?: number;
     createdBy?: string;
+    createdByName?: string;
   } | null;
 
   if (!body) {
@@ -61,11 +73,17 @@ export async function POST(request: Request) {
 
   const emoji = (body.emoji ?? "🗿").slice(0, 8);
   const label = (body.label ?? "Untitled").slice(0, 40);
+  const note = (body.note ?? "").slice(0, 160);
   const lat = Number(body.lat);
   const lng = Number(body.lng);
   const userLat = Number(body.userLat);
   const userLng = Number(body.userLng);
   const createdBy = (body.createdBy ?? "anonymous").slice(0, 40);
+  const createdByName = (body.createdByName ?? "Explorer").slice(0, 24);
+  const altitude =
+    body.altitude != null && Number.isFinite(Number(body.altitude))
+      ? Number(body.altitude)
+      : null;
   const admin = isAdminRequest(request);
 
   if (![lat, lng, userLat, userLng].every(Number.isFinite)) {
@@ -105,11 +123,17 @@ export async function POST(request: Request) {
     id: randomUUID(),
     emoji,
     label,
+    note,
     lat,
     lng,
+    altitude,
     createdAt: new Date().toISOString(),
     createdBy,
+    createdByName,
     byAdmin: admin,
+    snapCode: makeSnapCode(),
+    findCount: 0,
+    reactionCount: 0,
   };
 
   try {
@@ -118,9 +142,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          err instanceof Error
-            ? err.message
-            : "Failed to persist placement",
+          err instanceof Error ? err.message : "Failed to persist placement",
       },
       { status: 503 },
     );

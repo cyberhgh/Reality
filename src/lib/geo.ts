@@ -57,3 +57,27 @@ export function pointInCircle(
 ) {
   return distanceMeters(lat, lng, centerLat, centerLng) <= radiusMeters;
 }
+
+/** Move a point by north/east offsets in meters. */
+export function offsetLatLng(
+  lat: number,
+  lng: number,
+  northMeters: number,
+  eastMeters: number,
+) {
+  const dLat = northMeters / EARTH_RADIUS_M;
+  const dLng = eastMeters / (EARTH_RADIUS_M * Math.cos(toRad(lat)));
+  return {
+    lat: lat + toDeg(dLat),
+    lng: lng + toDeg(dLng),
+  };
+}
+
+export function makeSnapCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  const bytes = new Uint8Array(6);
+  globalThis.crypto.getRandomValues(bytes);
+  for (const b of bytes) out += alphabet[b % alphabet.length];
+  return out;
+}

@@ -11,6 +11,15 @@ export function getDeviceId() {
   return id;
 }
 
+export function getDisplayName() {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("reality-display-name") ?? "";
+}
+
+export function setDisplayName(name: string) {
+  localStorage.setItem("reality-display-name", name.trim().slice(0, 24));
+}
+
 export function getAdminPinClient() {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("reality-admin-pin") ?? "";
@@ -23,4 +32,19 @@ export function setAdminPinClient(pin: string) {
 export function adminHeaders(): HeadersInit {
   const pin = getAdminPinClient();
   return pin ? { "x-admin-pin": pin } : {};
+}
+
+export function getFoundIds(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem("reality-found-ids") ?? "[]") as string[];
+  } catch {
+    return [];
+  }
+}
+
+export function markFoundLocal(id: string) {
+  const ids = new Set(getFoundIds());
+  ids.add(id);
+  localStorage.setItem("reality-found-ids", JSON.stringify([...ids]));
 }

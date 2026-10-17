@@ -14,9 +14,9 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Reality — geo AR placements",
+  title: "Reality — find & share world drops",
   description:
-    "Mount digital objects at real-world coordinates and view them on-site with your phone camera.",
+    "A social layer on the real world: drop digital objects for others to find, react, and share.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
