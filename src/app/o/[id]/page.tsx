@@ -40,6 +40,14 @@ export default async function ObjectPage({
           Hint: {placement.note}
         </p>
       ) : null}
+      {placement.landmarkUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={placement.landmarkUrl}
+          alt="Landmark"
+          className="mt-4 h-48 w-full rounded-2xl object-cover"
+        />
+      ) : null}
       <div className="mt-4 flex flex-wrap gap-3 text-sm text-white/70">
         <span>{placement.findCount} finds</span>
         <span>{placement.reactionCount} reactions</span>

@@ -61,6 +61,7 @@ export function normalizePlacement(raw: Partial<Placement> & { id: string }): Pl
     snapCode: raw.snapCode ?? raw.id.slice(0, 6).toUpperCase(),
     findCount: Number(raw.findCount ?? 0),
     reactionCount: Number(raw.reactionCount ?? 0),
+    landmarkUrl: raw.landmarkUrl ?? null,
   };
 }
 

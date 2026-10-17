@@ -15,6 +15,8 @@ export type Placement = {
   snapCode: string;
   findCount: number;
   reactionCount: number;
+  /** Optional photo of the physical spot to help finders */
+  landmarkUrl?: string | null;
 };
 
 export type BanZone = {

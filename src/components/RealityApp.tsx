@@ -79,7 +79,48 @@ export default function RealityApp() {
     topFinders: Array<{ name: string; finds: number }>;
     topDroppers: Array<{ name: string; drops: number; foundByOthers: number }>;
   } | null>(null);
+  const [hideFound, setHideFound] = useState(true);
   const xr = useWebXR();
+
+  async function sharePlacement(p: Placement) {
+    const url = `${window.location.origin}/o/${p.id}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `${p.emoji} ${p.label}`,
+          text: `Find this Reality drop by ${p.createdByName}`,
+          url,
+        });
+      } else {
+        await navigator.clipboard.writeText(url);
+        setStatus("Link copied");
+      }
+    } catch {
+      await navigator.clipboard.writeText(url);
+      setStatus("Link copied");
+    }
+  }
+
+  async function uploadLandmark(placementId: string, file: File) {
+    const body = new FormData();
+    body.set("placementId", placementId);
+    body.set("file", file);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/landmarks", { method: "POST", body });
+      const data = await res.json();
+      if (!res.ok) setStatus(data.error ?? "Landmark upload failed");
+      else {
+        setStatus("Landmark photo attached");
+        if (lastPlaced?.id === placementId) {
+          setLastPlaced({ ...lastPlaced, landmarkUrl: data.url });
+        }
+        await refreshNearby();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const startCamera = useCallback(async () => {
     try {
@@ -816,11 +857,34 @@ export default function RealityApp() {
                 <p>
                   Snap code: <strong>{lastPlaced.snapCode}</strong>
                 </p>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={`/api/qr/${lastPlaced.snapCode}`}
                   alt={`QR for ${lastPlaced.snapCode}`}
                   className="mx-auto mt-2 h-40 w-40 rounded-lg bg-white p-2"
                 />
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void sharePlacement(lastPlaced)}
+                    className="rounded-lg bg-cyan-400/90 px-2 py-1 font-semibold text-[#06202b]"
+                  >
+                    Share
+                  </button>
+                  <label className="cursor-pointer rounded-lg bg-white/10 px-2 py-1">
+                    Add landmark photo
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void uploadLandmark(lastPlaced.id, file);
+                      }}
+                    />
+                  </label>
+                </div>
                 <p className="mt-2 break-all">
                   Share: {shareOrigin}/o/{lastPlaced.id}
                 </p>
@@ -851,10 +915,21 @@ export default function RealityApp() {
 
         {panel === "list" && (
           <div className="max-h-64 space-y-2 overflow-y-auto">
-            {nearby.length === 0 && (
+            <label className="flex items-center gap-2 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={hideFound}
+                onChange={(e) => setHideFound(e.target.checked)}
+              />
+              Hide already found
+            </label>
+            {nearby.filter((p) => !(hideFound && foundIds.includes(p.id)))
+              .length === 0 && (
               <p className="text-sm text-white/60">No objects within 250m.</p>
             )}
-            {nearby.map((p) => (
+            {nearby
+              .filter((p) => !(hideFound && foundIds.includes(p.id)))
+              .map((p) => (
               <div
                 key={p.id}
                 className={`rounded-xl px-3 py-2 ${
@@ -876,9 +951,22 @@ export default function RealityApp() {
                     <p className="text-[11px] text-white/60">
                       {directionHint(p)} · {p.findCount} finds
                     </p>
+                    {p.note ? (
+                      <p className="truncate text-[11px] text-white/45">
+                        Hint: {p.note}
+                      </p>
+                    ) : null}
                   </div>
                   <span className="text-[11px] text-cyan-200">View</span>
                 </button>
+                {p.landmarkUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={p.landmarkUrl}
+                    alt="Landmark"
+                    className="mt-2 h-20 w-full rounded-lg object-cover"
+                  />
+                ) : null}
                 <div className="mt-2 flex flex-wrap gap-3">
                   <button
                     type="button"
@@ -887,11 +975,18 @@ export default function RealityApp() {
                   >
                     Found ({FIND_RADIUS_METERS}m)
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => void sharePlacement(p)}
+                    className="text-[11px] text-cyan-200"
+                  >
+                    Share
+                  </button>
                   <a
                     href={`/o/${p.id}`}
                     className="text-[11px] text-white/70 underline"
                   >
-                    Share page
+                    Page
                   </a>
                   <a
                     href={`https://maps.apple.com/?ll=${p.lat},${p.lng}&q=${encodeURIComponent(p.label)}`}
