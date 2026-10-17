@@ -1,0 +1,10 @@
+{
+  "name": "Reality",
+  "short_name": "Reality",
+  "description": "Mount and discover digital objects at real-world locations.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "orientation": "portrait"
+}
