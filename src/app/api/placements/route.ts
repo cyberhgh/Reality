@@ -3,7 +3,11 @@ import { randomUUID } from "crypto";
 import { connection } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
 import { distanceMeters, pointInCircle } from "@/lib/geo";
-import { getStore, updateStore } from "@/lib/store";
+import {
+  addPlacement,
+  getStore,
+  removePlacement,
+} from "@/lib/store";
 import {
   NEARBY_RADIUS_METERS,
   PRESENCE_RADIUS_METERS,
@@ -109,10 +113,7 @@ export async function POST(request: Request) {
   };
 
   try {
-    await updateStore((current) => ({
-      ...current,
-      placements: [placement, ...current.placements].slice(0, 500),
-    }));
+    await addPlacement(placement);
   } catch (err) {
     return NextResponse.json(
       {
@@ -129,6 +130,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  await connection();
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "Admin only" }, { status: 401 });
   }
@@ -140,10 +142,7 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    await updateStore((current) => ({
-      ...current,
-      placements: current.placements.filter((p) => p.id !== id),
-    }));
+    await removePlacement(id);
   } catch (err) {
     return NextResponse.json(
       {

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { connection } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
-import { getStore, updateStore } from "@/lib/store";
+import { addZone, getStore, removeZone } from "@/lib/store";
 import type { BanZone } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -56,10 +56,7 @@ export async function POST(request: Request) {
   };
 
   try {
-    await updateStore((current) => ({
-      ...current,
-      zones: [zone, ...current.zones].slice(0, 200),
-    }));
+    await addZone(zone);
   } catch (err) {
     return NextResponse.json(
       {
@@ -74,6 +71,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  await connection();
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "Admin only" }, { status: 401 });
   }
@@ -85,10 +83,7 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    await updateStore((current) => ({
-      ...current,
-      zones: current.zones.filter((z) => z.id !== id),
-    }));
+    await removeZone(id);
   } catch (err) {
     return NextResponse.json(
       {
