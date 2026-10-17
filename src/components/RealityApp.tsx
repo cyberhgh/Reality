@@ -13,6 +13,7 @@ type Overlay = NearbyPlacement & {
   yPercent: number;
   scale: number;
   visible: boolean;
+  mode: "ar" | "here" | "billboard";
 };
 
 export default function RealityApp() {
@@ -95,19 +96,61 @@ export default function RealityApp() {
 
   const overlays: Overlay[] = useMemo(() => {
     if (geo.lat == null || geo.lng == null) return [];
-    const heading = geo.heading ?? 0;
-    return nearby.map((p) => {
+
+    // Closest-first so near objects get stable screen slots.
+    const sorted = [...nearby].sort(
+      (a, b) => a.distanceMeters - b.distanceMeters,
+    );
+
+    return sorted.map((p, index) => {
+      const dist = Math.max(p.distanceMeters, 0);
+
+      // At your feet / GPS noise range: always pin center (bearing is meaningless).
+      if (dist < 12) {
+        return {
+          ...p,
+          xPercent: 50,
+          yPercent: 42,
+          scale: Math.max(1.2, Math.min(2.6, 2.4 - dist / 20)),
+          visible: true,
+          mode: "here" as const,
+        };
+      }
+
+      // No compass yet: show a readable billboard stack instead of FOV-culling to empty.
+      if (!geo.hasCompass || geo.heading == null) {
+        return {
+          ...p,
+          xPercent: 50,
+          yPercent: 28 + index * 12,
+          scale: Math.max(0.85, Math.min(1.8, 14 / Math.sqrt(dist))),
+          visible: index < 4,
+          mode: "billboard" as const,
+        };
+      }
+
       const bearing = bearingDegrees(geo.lat!, geo.lng!, p.lat, p.lng);
-      const delta = normalizeHeadingDelta(bearing - heading);
-      const fov = 60;
-      const visible = Math.abs(delta) <= fov / 2 + 5;
-      const xPercent = 50 + (delta / (fov / 2)) * 45;
-      const dist = Math.max(p.distanceMeters, 1);
-      const yPercent = 48 + Math.min(dist / 8, 28);
-      const scale = Math.max(0.55, Math.min(2.4, 18 / Math.sqrt(dist)));
-      return { ...p, xPercent, yPercent, scale, visible };
+      const delta = normalizeHeadingDelta(bearing - geo.heading);
+      const fov = 75;
+      const inView = Math.abs(delta) <= fov / 2;
+      const xPercent = Math.min(
+        92,
+        Math.max(8, 50 + (delta / (fov / 2)) * 42),
+      );
+      // Closer = lower on screen; farther = toward horizon.
+      const yPercent = Math.min(70, Math.max(28, 68 - Math.min(dist / 3.5, 36)));
+      const scale = Math.max(0.7, Math.min(2.2, 16 / Math.sqrt(dist)));
+
+      return {
+        ...p,
+        xPercent: inView ? xPercent : delta < 0 ? 6 : 94,
+        yPercent: inView ? yPercent : 40,
+        scale: inView ? scale : 0.75,
+        visible: true,
+        mode: "ar" as const,
+      };
     });
-  }, [nearby, geo.lat, geo.lng, geo.heading]);
+  }, [nearby, geo.lat, geo.lng, geo.heading, geo.hasCompass]);
 
   async function placeHere() {
     if (geo.lat == null || geo.lng == null) {
@@ -251,24 +294,31 @@ export default function RealityApp() {
           </div>
         )}
 
-        {overlays
-          .filter((o) => o.visible)
-          .map((o) => (
-            <div
-              key={o.id}
-              className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 text-center drop-shadow-[0_4px_12px_rgba(0,0,0,0.75)]"
-              style={{
-                left: `${o.xPercent}%`,
-                top: `${o.yPercent}%`,
-                transform: `translate(-50%, -50%) scale(${o.scale})`,
-              }}
-            >
-              <div className="text-5xl leading-none">{o.emoji}</div>
-              <div className="mt-1 rounded-full bg-black/55 px-2 py-0.5 text-[10px] text-white/90">
-                {Math.round(o.distanceMeters)}m · {o.label}
+        {cameraReady &&
+          overlays
+            .filter((o) => o.visible)
+            .map((o) => (
+              <div
+                key={o.id}
+                className="pointer-events-none absolute z-[5] text-center drop-shadow-[0_4px_12px_rgba(0,0,0,0.85)]"
+                style={{
+                  left: `${o.xPercent}%`,
+                  top: `${o.yPercent}%`,
+                  transform: `translate(-50%, -50%) scale(${o.scale})`,
+                }}
+              >
+                {o.mode === "ar" && (o.xPercent <= 8 || o.xPercent >= 92) && (
+                  <div className="mb-1 text-lg text-cyan-200">
+                    {o.xPercent <= 8 ? "◀" : "▶"}
+                  </div>
+                )}
+                <div className="text-5xl leading-none">{o.emoji}</div>
+                <div className="mt-1 whitespace-nowrap rounded-full bg-black/65 px-2 py-0.5 text-[10px] text-white/95">
+                  {Math.round(o.distanceMeters)}m · {o.label}
+                  {o.mode === "here" ? " · here" : ""}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
       </div>
 
       <header className="relative z-10 flex items-start justify-between gap-3 p-4 pt-[max(1rem,env(safe-area-inset-top))]">
@@ -276,13 +326,26 @@ export default function RealityApp() {
           <p className="text-lg font-semibold tracking-tight">Reality</p>
           <p className="text-xs text-white/70">
             GPS {accuracyLabel}
-            {geo.heading != null ? ` · heading ${Math.round(geo.heading)}°` : ""}
+            {geo.hasCompass && geo.heading != null
+              ? ` · heading ${Math.round(geo.heading)}°`
+              : " · compass off"}
             {isAdmin ? " · admin" : ""}
             {persistence ? ` · store:${persistence}` : ""}
           </p>
         </div>
-        <div className="rounded-full bg-black/45 px-3 py-1 text-xs backdrop-blur">
-          {nearby.length} nearby
+        <div className="flex flex-col items-end gap-2">
+          <div className="rounded-full bg-black/45 px-3 py-1 text-xs backdrop-blur">
+            {nearby.length} nearby
+          </div>
+          {cameraReady && !geo.hasCompass && (
+            <button
+              type="button"
+              onClick={() => void geo.requestOrientationPermission()}
+              className="rounded-full bg-cyan-400/90 px-3 py-1 text-[11px] font-semibold text-[#06202b]"
+            >
+              Enable compass
+            </button>
+          )}
         </div>
       </header>
 
