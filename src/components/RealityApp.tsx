@@ -26,6 +26,7 @@ import {
   type Placement,
 } from "@/lib/types";
 import { useGeo } from "@/hooks/useGeo";
+import { useWebXR } from "@/hooks/useWebXR";
 
 type NearbyPlacement = Placement & { distanceMeters: number };
 
@@ -74,6 +75,11 @@ export default function RealityApp() {
   const [discover, setDiscover] = useState<DiscoverPayload | null>(null);
   const [snapInput, setSnapInput] = useState("");
   const [lastPlaced, setLastPlaced] = useState<Placement | null>(null);
+  const [leaderboard, setLeaderboard] = useState<{
+    topFinders: Array<{ name: string; finds: number }>;
+    topDroppers: Array<{ name: string; drops: number; foundByOthers: number }>;
+  } | null>(null);
+  const xr = useWebXR();
 
   const startCamera = useCallback(async () => {
     try {
@@ -132,6 +138,13 @@ export default function RealityApp() {
     setZones(data.zones ?? []);
   }, []);
 
+  const refreshLeaderboard = useCallback(async () => {
+    const res = await fetch(`/api/leaderboard?_=${Date.now()}`, {
+      cache: "no-store",
+    });
+    setLeaderboard(await res.json());
+  }, []);
+
   useEffect(() => {
     const name = getDisplayName();
     setDisplayNameState(name);
@@ -155,12 +168,14 @@ export default function RealityApp() {
     void refreshNearby();
     void refreshZones();
     void refreshDiscover();
+    void refreshLeaderboard();
     const id = setInterval(() => {
       void refreshNearby();
       void refreshDiscover();
+      void refreshLeaderboard();
     }, 8000);
     return () => clearInterval(id);
-  }, [refreshNearby, refreshZones, refreshDiscover]);
+  }, [refreshNearby, refreshZones, refreshDiscover, refreshLeaderboard]);
 
   const selected = useMemo(
     () => nearby.find((p) => p.id === selectedId) ?? null,
@@ -801,18 +816,35 @@ export default function RealityApp() {
                 <p>
                   Snap code: <strong>{lastPlaced.snapCode}</strong>
                 </p>
-                <p className="mt-1 break-all">
+                <img
+                  src={`/api/qr/${lastPlaced.snapCode}`}
+                  alt={`QR for ${lastPlaced.snapCode}`}
+                  className="mx-auto mt-2 h-40 w-40 rounded-lg bg-white p-2"
+                />
+                <p className="mt-2 break-all">
                   Share: {shareOrigin}/o/{lastPlaced.id}
                 </p>
                 <p className="mt-1 break-all">
-                  QR/snap URL: {shareOrigin}/snap/{lastPlaced.snapCode}
+                  Snap: {shareOrigin}/snap/{lastPlaced.snapCode}
                 </p>
               </div>
             )}
+            {xr.supported && (
+              <button
+                type="button"
+                onClick={() => void xr.probeHitTest()}
+                className="w-full rounded-xl bg-white/10 px-4 py-2 text-xs"
+              >
+                Probe WebXR hit-test (experimental)
+              </button>
+            )}
+            {xr.message && (
+              <p className="text-[11px] text-amber-200">{xr.message}</p>
+            )}
             <p className="text-[11px] text-white/45">
               GPS ≤{MAX_PLACE_ACCURACY_M}m required (admins exempt). Presence{" "}
-              {PRESENCE_RADIUS_METERS}m. Walking uses step dead-reckoning between
-              fixes.
+              {PRESENCE_RADIUS_METERS}m. Extra accuracy: step dead-reckoning,
+              manual fine-tune, snap QR, optional WebXR.
             </p>
           </div>
         )}
@@ -904,10 +936,21 @@ export default function RealityApp() {
             <p className="text-xs text-white/60">
               Your finds: {foundIds.length}
             </p>
+            <p className="text-xs font-semibold text-white/80">Top finders</p>
+            {(leaderboard?.topFinders ?? []).slice(0, 5).map((r) => (
+              <p key={r.name + r.finds} className="text-[11px] text-white/65">
+                {r.name} · {r.finds}
+              </p>
+            ))}
+            <p className="text-xs font-semibold text-white/80">Top droppers</p>
+            {(leaderboard?.topDroppers ?? []).slice(0, 5).map((r) => (
+              <p key={r.name + r.drops} className="text-[11px] text-white/65">
+                {r.name} · {r.drops} drops · {r.foundByOthers} found
+              </p>
+            ))}
             <p className="text-[11px] leading-relaxed text-white/45">
               Accuracy stack: GPS blend + compass + step dead-reckoning + manual
-              N/E fine-tune + snap codes (strongest when a marker is posted on
-              site).
+              N/E fine-tune + snap QR codes + WebXR when the device supports it.
             </p>
           </div>
         )}

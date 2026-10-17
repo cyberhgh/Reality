@@ -33,6 +33,12 @@ export default async function SnapPage({
         Code <strong>{placement.snapCode}</strong> unlocks this drop without
         relying on GPS accuracy — post this page/QR at the physical spot.
       </p>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`/api/qr/${placement.snapCode}`}
+        alt={`QR ${placement.snapCode}`}
+        className="mx-auto mt-6 h-56 w-56 rounded-2xl bg-white p-3"
+      />
       <Link
         href={`/?snap=${placement.snapCode}`}
         className="mt-8 rounded-xl bg-cyan-400 px-4 py-3 text-center text-sm font-semibold text-[#06202b]"
