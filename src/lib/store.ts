@@ -8,6 +8,7 @@ import type {
   Reaction,
   StoreData,
 } from "./types";
+import type { LandPermit } from "./publicPlace";
 
 const EMPTY: StoreData = { placements: [], zones: [] };
 const LOCAL_PATH = path.join(process.cwd(), "data", "store.json");
@@ -15,6 +16,7 @@ const PLACEMENT_PREFIX = "placements/";
 const ZONE_PREFIX = "zones/";
 const FIND_PREFIX = "finds/";
 const REACTION_PREFIX = "reactions/";
+const PERMIT_PREFIX = "permits/";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -62,6 +64,7 @@ export function normalizePlacement(raw: Partial<Placement> & { id: string }): Pl
     findCount: Number(raw.findCount ?? 0),
     reactionCount: Number(raw.reactionCount ?? 0),
     landmarkUrl: raw.landmarkUrl ?? null,
+    placeSource: raw.placeSource,
   };
 }
 
@@ -351,6 +354,30 @@ export async function listReactions(placementId?: string): Promise<Reaction[]> {
   } catch {
     return [];
   }
+}
+
+export async function listPermits(): Promise<LandPermit[]> {
+  if (blobEnabled()) {
+    return listJsonPrefix<LandPermit>(PERMIT_PREFIX);
+  }
+  const file = path.join(process.cwd(), "data", "permits.json");
+  try {
+    return JSON.parse(await fs.readFile(file, "utf8")) as LandPermit[];
+  } catch {
+    return [];
+  }
+}
+
+export async function savePermit(permit: LandPermit): Promise<void> {
+  if (blobEnabled()) {
+    await putJson(`${PERMIT_PREFIX}${permit.id}.json`, permit);
+    return;
+  }
+  const file = path.join(process.cwd(), "data", "permits.json");
+  const all = await listPermits();
+  const next = [permit, ...all.filter((p) => p.id !== permit.id)];
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(next, null, 2), "utf8");
 }
 
 export function persistenceMode(): "blob" | "file" | "memory" {

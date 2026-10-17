@@ -22,6 +22,18 @@ https://reality-geo-mvp.vercel.app
 - Optional WebXR hit-test probe when the device supports it
 - Landmark photos to help visual recognition
 
+## Public places only (policy)
+
+Drops are limited to places that look publicly accessible, unless a **land permit** covers the spot:
+
+1. Approved land permit for that user (private venue with permission; drops can still be public finds)
+2. Google Street View metadata (if `GOOGLE_MAPS_API_KEY` is set)
+3. OpenStreetMap public roads/paths/parks (free fallback)
+
+Set `PUBLIC_PLACE_POLICY=off` to disable. Admins always bypass.
+
+These signals are heuristics, not legal cadastral ownership proofs.
+
 ## Admin
 
 Default PIN: `reality-admin` (override with `ADMIN_PIN`)

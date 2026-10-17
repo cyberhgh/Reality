@@ -10,6 +10,8 @@ import {
   setAdminPinClient,
   getFoundIds,
   markFoundLocal,
+  getFollowedCreators,
+  toggleFollowCreator,
 } from "@/lib/client";
 import {
   bearingDegrees,
@@ -89,6 +91,22 @@ export default function RealityApp() {
     Array<{ id: string; userName: string; text: string }>
   >([]);
   const [watchingArea, setWatchingArea] = useState(false);
+  const [following, setFollowing] = useState<string[]>([]);
+  const [placeEligibility, setPlaceEligibility] = useState<{
+    allowed: boolean;
+    reason: string;
+    source: string;
+  } | null>(null);
+  const [permits, setPermits] = useState<
+    Array<{
+      id: string;
+      name: string;
+      status: string;
+      radiusMeters: number;
+      ownerName: string;
+    }>
+  >([]);
+  const [permitName, setPermitName] = useState("My venue");
   const knownNearbyRef = useRef<Set<string>>(new Set());
   const xr = useWebXR();
 
@@ -208,6 +226,31 @@ export default function RealityApp() {
     setMyFinds(mine);
   }, []);
 
+  const refreshPlaceCheck = useCallback(async () => {
+    if (geo.lat == null || geo.lng == null) return;
+    const shifted = offsetLatLng(geo.lat, geo.lng, nudgeN, nudgeE);
+    const params = new URLSearchParams({
+      lat: String(shifted.lat),
+      lng: String(shifted.lng),
+      userId: getDeviceId().slice(0, 8),
+      _: String(Date.now()),
+    });
+    const res = await fetch(`/api/place-check?${params}`, {
+      headers: adminHeaders(),
+      cache: "no-store",
+    });
+    const data = await res.json();
+    setPlaceEligibility(data.eligibility ?? null);
+  }, [geo.lat, geo.lng, nudgeN, nudgeE]);
+
+  const refreshPermits = useCallback(async () => {
+    const res = await fetch(`/api/permits?_=${Date.now()}`, {
+      cache: "no-store",
+    });
+    const data = await res.json();
+    setPermits(data.permits ?? []);
+  }, []);
+
   async function reportPlacement(placementId: string) {
     const reason = window.prompt("Why report this drop?")?.trim();
     if (!reason) return;
@@ -230,6 +273,7 @@ export default function RealityApp() {
     setAdminPin(getAdminPinClient());
     setIsAdmin(Boolean(getAdminPinClient()));
     setFoundIds(getFoundIds());
+    setFollowing(getFollowedCreators());
     void fetch("/api/health")
       .then((r) => r.json())
       .then((d) => setPersistence(d.persistence ?? null))
@@ -248,12 +292,16 @@ export default function RealityApp() {
     void refreshDiscover();
     void refreshLeaderboard();
     void refreshMyFinds();
+    void refreshPlaceCheck();
+    void refreshPermits();
     setWatchingArea(localStorage.getItem("reality-watch-area") === "1");
     const id = setInterval(() => {
       void refreshNearby();
       void refreshDiscover();
       void refreshLeaderboard();
       void refreshMyFinds();
+      void refreshPlaceCheck();
+      void refreshPermits();
     }, 8000);
     return () => clearInterval(id);
   }, [
@@ -262,6 +310,8 @@ export default function RealityApp() {
     refreshDiscover,
     refreshLeaderboard,
     refreshMyFinds,
+    refreshPlaceCheck,
+    refreshPermits,
   ]);
 
   // Local "watch this area" — alert when a brand-new nearby drop appears.
@@ -1003,9 +1053,27 @@ export default function RealityApp() {
                 </button>
               </div>
             </div>
+            {placeEligibility && (
+              <div
+                className={`rounded-xl px-3 py-2 text-[11px] ${
+                  placeEligibility.allowed
+                    ? "bg-emerald-400/15 text-emerald-100"
+                    : "bg-amber-400/15 text-amber-100"
+                }`}
+              >
+                {placeEligibility.allowed ? "Allowed" : "Blocked"} ·{" "}
+                {placeEligibility.source}: {placeEligibility.reason}
+              </div>
+            )}
             <button
               type="button"
-              disabled={busy || geo.lat == null}
+              disabled={
+                busy ||
+                geo.lat == null ||
+                (placeEligibility != null &&
+                  !placeEligibility.allowed &&
+                  !isAdmin)
+              }
               onClick={() => void placeHere()}
               className="w-full rounded-xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-[#06202b] disabled:opacity-50"
             >
@@ -1287,6 +1355,87 @@ export default function RealityApp() {
             >
               Ban placement here
             </button>
+            <p className="text-xs font-semibold text-white/80">Land permits</p>
+            <input
+              value={permitName}
+              onChange={(e) => setPermitName(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
+              placeholder="Venue / land name"
+            />
+            <button
+              type="button"
+              disabled={busy || geo.lat == null}
+              onClick={async () => {
+                if (geo.lat == null || geo.lng == null) return;
+                setBusy(true);
+                try {
+                  const res = await fetch("/api/permits", {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...adminHeaders(),
+                    },
+                    body: JSON.stringify({
+                      name: permitName,
+                      lat: geo.lat,
+                      lng: geo.lng,
+                      radiusMeters: 40,
+                      ownerId: getDeviceId().slice(0, 8),
+                      ownerName: displayName,
+                      makePublic: true,
+                    }),
+                  });
+                  const data = await res.json();
+                  if (!res.ok) setStatus(data.error ?? "Permit failed");
+                  else {
+                    setStatus(
+                      data.permit.status === "approved"
+                        ? `Permit approved: ${data.permit.name}`
+                        : `Permit requested (pending admin): ${data.permit.name}`,
+                    );
+                    await refreshPermits();
+                  }
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              className="w-full rounded-xl bg-white/10 px-4 py-2 text-sm"
+            >
+              Request land permit here
+            </button>
+            {permits.slice(0, 8).map((p) => (
+              <div
+                key={p.id}
+                className="flex items-center justify-between gap-2 rounded-xl bg-white/5 px-3 py-2 text-[11px]"
+              >
+                <span>
+                  {p.name} · {p.status} · {p.radiusMeters}m · {p.ownerName}
+                </span>
+                {isAdmin && p.status === "pending" && (
+                  <button
+                    type="button"
+                    className="text-emerald-300"
+                    onClick={async () => {
+                      await fetch("/api/permits", {
+                        method: "PATCH",
+                        headers: {
+                          "Content-Type": "application/json",
+                          ...adminHeaders(),
+                        },
+                        body: JSON.stringify({
+                          id: p.id,
+                          status: "approved",
+                        }),
+                      });
+                      await refreshPermits();
+                      setStatus(`Approved permit ${p.name}`);
+                    }}
+                  >
+                    Approve
+                  </button>
+                )}
+              </div>
+            ))}
             {zones.map((z) => (
               <div
                 key={z.id}

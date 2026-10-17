@@ -3,9 +3,11 @@ import { randomUUID } from "crypto";
 import { connection } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
 import { distanceMeters, makeSnapCode, pointInCircle } from "@/lib/geo";
+import { evaluatePublicPlace } from "@/lib/publicPlace";
 import {
   addPlacement,
   getStore,
+  listPermits,
   removePlacement,
 } from "@/lib/store";
 import {
@@ -119,6 +121,25 @@ export async function POST(request: Request) {
     );
   }
 
+  const permits = await listPermits();
+  const eligibility = await evaluatePublicPlace({
+    lat,
+    lng,
+    userId: createdBy,
+    isAdmin: admin,
+    permits,
+  });
+  if (!eligibility.allowed) {
+    return NextResponse.json(
+      {
+        error: eligibility.reason,
+        code: "NOT_PUBLIC_PLACE",
+        eligibility,
+      },
+      { status: 403 },
+    );
+  }
+
   const placement: Placement = {
     id: randomUUID(),
     emoji,
@@ -134,6 +155,7 @@ export async function POST(request: Request) {
     snapCode: makeSnapCode(),
     findCount: 0,
     reactionCount: 0,
+    placeSource: eligibility.source,
   };
 
   try {
@@ -148,7 +170,7 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({ placement }, { status: 201 });
+  return NextResponse.json({ placement, eligibility }, { status: 201 });
 }
 
 export async function DELETE(request: Request) {

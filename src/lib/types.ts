@@ -17,6 +17,8 @@ export type Placement = {
   reactionCount: number;
   /** Optional photo of the physical spot to help finders */
   landmarkUrl?: string | null;
+  /** How the drop passed the public-place policy */
+  placeSource?: "admin" | "permit" | "streetview" | "osm" | "policy_off" | string;
 };
 
 export type BanZone = {
@@ -27,6 +29,8 @@ export type BanZone = {
   radiusMeters: number;
   createdAt: string;
 };
+
+export type { LandPermit } from "./publicPlace";
 
 export type FindEvent = {
   id: string;

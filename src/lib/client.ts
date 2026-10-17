@@ -48,3 +48,22 @@ export function markFoundLocal(id: string) {
   ids.add(id);
   localStorage.setItem("reality-found-ids", JSON.stringify([...ids]));
 }
+
+export function getFollowedCreators(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(
+      localStorage.getItem("reality-following") ?? "[]",
+    ) as string[];
+  } catch {
+    return [];
+  }
+}
+
+export function toggleFollowCreator(creatorId: string) {
+  const set = new Set(getFollowedCreators());
+  if (set.has(creatorId)) set.delete(creatorId);
+  else set.add(creatorId);
+  localStorage.setItem("reality-following", JSON.stringify([...set]));
+  return [...set];
+}
