@@ -83,6 +83,10 @@ export default function RealityApp() {
   const [myFinds, setMyFinds] = useState<
     Array<{ placementId: string; method: string; createdAt: string }>
   >([]);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [selectedComments, setSelectedComments] = useState<
+    Array<{ id: string; userName: string; text: string }>
+  >([]);
   const xr = useWebXR();
 
   async function sharePlacement(p: Placement) {
@@ -484,9 +488,49 @@ export default function RealityApp() {
     if (!cameraReady) void startCamera();
   }
 
+  async function loadComments(placementId: string) {
+    const res = await fetch(
+      `/api/comments?placementId=${placementId}&_=${Date.now()}`,
+      { cache: "no-store" },
+    );
+    const data = await res.json();
+    setSelectedComments(data.comments ?? []);
+  }
+
+  async function postComment(placementId: string) {
+    if (!displayName || !commentDraft.trim()) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          placementId,
+          userId: getDeviceId(),
+          userName: displayName,
+          text: commentDraft,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setStatus(data.error ?? "Comment failed");
+        return;
+      }
+      setCommentDraft("");
+      await loadComments(placementId);
+      setStatus("Comment posted");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
-    if (!selected) return;
+    if (!selected) {
+      setSelectedComments([]);
+      return;
+    }
     setStatus(`${selected.emoji} ${directionHint(selected)}`);
+    void loadComments(selected.id);
   }, [selected, geo.lat, geo.lng, geo.heading]);
 
   async function saveAdminPin() {
@@ -686,35 +730,60 @@ export default function RealityApp() {
           {geo.error && <p className="text-amber-200">{geo.error}</p>}
           {status && <p className="text-cyan-100">{status}</p>}
           {selected && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void markFound(selected, "gps")}
-                className="rounded-lg bg-emerald-400/90 px-2 py-1 text-[11px] font-semibold text-[#062b18]"
-              >
-                Mark found
-              </button>
-              {REACTION_EMOJIS.map((r) => (
+            <div className="mt-2 space-y-2">
+              <div className="flex flex-wrap gap-2">
                 <button
-                  key={r}
                   type="button"
-                  onClick={() => void reactTo(selected.id, r)}
+                  disabled={busy}
+                  onClick={() => void markFound(selected, "gps")}
+                  className="rounded-lg bg-emerald-400/90 px-2 py-1 text-[11px] font-semibold text-[#062b18]"
+                >
+                  Mark found
+                </button>
+                {REACTION_EMOJIS.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => void reactTo(selected.id, r)}
+                    className="rounded-lg bg-white/10 px-2 py-1 text-[11px]"
+                  >
+                    {r}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedId(null);
+                    setStatus("Browsing nearby drops");
+                  }}
                   className="rounded-lg bg-white/10 px-2 py-1 text-[11px]"
                 >
-                  {r}
+                  Clear focus
                 </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedId(null);
-                  setStatus("Browsing nearby drops");
-                }}
-                className="rounded-lg bg-white/10 px-2 py-1 text-[11px]"
-              >
-                Clear focus
-              </button>
+              </div>
+              <div className="max-h-16 space-y-1 overflow-y-auto">
+                {selectedComments.slice(0, 4).map((c) => (
+                  <p key={c.id} className="text-[11px] text-white/65">
+                    <span className="text-white/90">{c.userName}</span>: {c.text}
+                  </p>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={commentDraft}
+                  onChange={(e) => setCommentDraft(e.target.value)}
+                  placeholder="Say something…"
+                  className="flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void postComment(selected.id)}
+                  className="rounded-lg bg-cyan-400/90 px-2 py-1 text-[11px] font-semibold text-[#06202b]"
+                >
+                  Post
+                </button>
+              </div>
             </div>
           )}
         </div>
