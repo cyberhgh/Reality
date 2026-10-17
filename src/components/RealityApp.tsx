@@ -35,6 +35,7 @@ export default function RealityApp() {
     { id: string; name: string; lat: number; lng: number; radiusMeters: number }[]
   >([]);
   const [persistence, setPersistence] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const startCamera = useCallback(async () => {
     try {
@@ -264,6 +265,34 @@ export default function RealityApp() {
   const accuracyLabel =
     geo.accuracy != null ? `±${Math.round(geo.accuracy)}m` : "—";
 
+  function directionHint(p: NearbyPlacement) {
+    if (geo.lat == null || geo.lng == null) return "Find in camera";
+    if (p.distanceMeters < 12) return "Look around — it's right here";
+    const bearing = bearingDegrees(geo.lat, geo.lng, p.lat, p.lng);
+    if (geo.heading == null) {
+      const cardinals = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+      const idx = Math.round(bearing / 45) % 8;
+      return `Face ${cardinals[idx]} · ${Math.round(p.distanceMeters)}m`;
+    }
+    const delta = normalizeHeadingDelta(bearing - geo.heading);
+    if (Math.abs(delta) < 15) return `Straight ahead · ${Math.round(p.distanceMeters)}m`;
+    if (delta < 0) return `Turn left ${Math.round(Math.abs(delta))}° · ${Math.round(p.distanceMeters)}m`;
+    return `Turn right ${Math.round(delta)}° · ${Math.round(p.distanceMeters)}m`;
+  }
+
+  function mapsUrl(p: NearbyPlacement) {
+    const q = `${p.lat},${p.lng}`;
+    return `https://maps.apple.com/?ll=${q}&q=${encodeURIComponent(p.label || p.emoji)}`;
+  }
+
+  function focusPlacement(p: NearbyPlacement) {
+    setSelectedId(p.id);
+    setStatus(`${p.emoji} ${directionHint(p)}`);
+    if (!cameraReady) {
+      void startCamera();
+    }
+  }
+
   return (
     <div className="relative flex min-h-[100dvh] flex-col bg-[#0b1220] text-white">
       <div className="absolute inset-0 overflow-hidden bg-black">
@@ -312,10 +341,17 @@ export default function RealityApp() {
                     {o.xPercent <= 8 ? "◀" : "▶"}
                   </div>
                 )}
-                <div className="text-5xl leading-none">{o.emoji}</div>
+                <div
+                  className={`text-5xl leading-none ${
+                    selectedId === o.id ? "rounded-full ring-4 ring-cyan-300/80" : ""
+                  }`}
+                >
+                  {o.emoji}
+                </div>
                 <div className="mt-1 whitespace-nowrap rounded-full bg-black/65 px-2 py-0.5 text-[10px] text-white/95">
                   {Math.round(o.distanceMeters)}m · {o.label}
                   {o.mode === "here" ? " · here" : ""}
+                  {selectedId === o.id ? " · selected" : ""}
                 </div>
               </div>
             ))}
@@ -419,28 +455,48 @@ export default function RealityApp() {
             {nearby.map((p) => (
               <div
                 key={p.id}
-                className="flex items-center justify-between gap-3 rounded-xl bg-white/5 px-3 py-2"
+                className={`rounded-xl px-3 py-2 ${
+                  selectedId === p.id
+                    ? "bg-cyan-400/20 ring-1 ring-cyan-300/60"
+                    : "bg-white/5"
+                }`}
               >
-                <div className="min-w-0">
-                  <p className="truncate text-sm">
-                    {p.emoji} {p.label}
-                  </p>
-                  <p className="text-[11px] text-white/50">
-                    {Math.round(p.distanceMeters)}m away
-                    {geo.lat != null && geo.lng != null
-                      ? ` · ${distanceMeters(geo.lat, geo.lng, p.lat, p.lng).toFixed(0)}m`
-                      : ""}
-                  </p>
-                </div>
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => void removePlacement(p.id)}
-                    className="text-xs text-rose-300"
+                <button
+                  type="button"
+                  onClick={() => focusPlacement(p)}
+                  className="flex w-full items-start justify-between gap-3 text-left"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm">
+                      {p.emoji} {p.label}
+                    </p>
+                    <p className="text-[11px] text-white/60">
+                      {directionHint(p)}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-[11px] font-medium text-cyan-200">
+                    View
+                  </span>
+                </button>
+                <div className="mt-2 flex items-center gap-3">
+                  <a
+                    href={mapsUrl(p)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-white/70 underline underline-offset-2"
                   >
-                    Remove
-                  </button>
-                )}
+                    Open in Maps
+                  </a>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => void removePlacement(p.id)}
+                      className="text-[11px] text-rose-300"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
