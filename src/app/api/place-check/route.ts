@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { connection } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
-import { evaluatePublicPlace } from "@/lib/publicPlace";
+import { decidePlacement } from "@/lib/publicPlace";
 import { listPermits } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Preview whether a lat/lng is eligible before the user commits a drop. */
+/** Preview visibility outcome before the user commits a drop. */
 export async function GET(request: Request) {
   await connection();
   const { searchParams } = new URL(request.url);
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   }
 
   const permits = await listPermits();
-  const eligibility = await evaluatePublicPlace({
+  const decision = await decidePlacement({
     lat,
     lng,
     userId,
@@ -32,7 +32,14 @@ export async function GET(request: Request) {
   });
 
   return NextResponse.json({
-    eligibility,
+    decision,
+    eligibility: {
+      allowed: decision.canPlace,
+      reason: decision.reason,
+      source: decision.source,
+      visibility: decision.visibility,
+      landOwnerName: decision.landOwnerName ?? null,
+    },
     policy:
       (process.env.PUBLIC_PLACE_POLICY ?? "on").toLowerCase() !== "off"
         ? "on"

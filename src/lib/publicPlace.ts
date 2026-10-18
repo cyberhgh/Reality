@@ -1,21 +1,43 @@
 /**
- * Placement eligibility for "public places only" with private-land permits.
+ * Public vs private land placement policy.
  *
- * Signals (best → fallback):
- * 1) Active land permit covering the point (owner/admin granted)
- * 2) Google Street View metadata (optional; needs GOOGLE_MAPS_API_KEY)
- * 3) OpenStreetMap Overpass: near public roads/paths/parks/plazas
+ * - Public-access spots (Street View / OSM): drops are public immediately.
+ * - Private spots: anyone may still place + view their own drop.
+ *   Others only see it after the property owner (land permit holder) approves.
  *
  * Street View / OSM are heuristics — not legal cadastral proofs.
  */
 
 import { pointInCircle } from "./geo";
 
+export type Visibility = "public" | "private" | "pending_owner";
+
+export type PlaceDecision = {
+  /** Always true for placement itself (except ban zones / admin blocks handled elsewhere) */
+  canPlace: boolean;
+  visibility: Visibility;
+  reason: string;
+  source:
+    | "admin"
+    | "permit"
+    | "streetview"
+    | "osm"
+    | "policy_off"
+    | "private_land";
+  landPermitId?: string | null;
+  landOwnerId?: string | null;
+  landOwnerName?: string | null;
+  details?: Record<string, unknown>;
+};
+
+/** @deprecated use PlaceDecision — kept for place-check UI compatibility */
 export type PlaceEligibility = {
   allowed: boolean;
   reason: string;
-  source: "admin" | "permit" | "streetview" | "osm" | "policy_off" | "denied";
+  source: PlaceDecision["source"] | "denied";
   details?: Record<string, unknown>;
+  visibility?: Visibility;
+  landOwnerName?: string | null;
 };
 
 export type LandPermit = {
@@ -26,10 +48,9 @@ export type LandPermit = {
   radiusMeters: number;
   ownerId: string;
   ownerName: string;
-  /** User ids allowed to place; include "*" to allow any registered member */
+  /** Users pre-approved to publish publicly on this land without per-drop review */
   allowedUserIds: string[];
   status: "pending" | "approved" | "revoked";
-  /** Drops on this land are visible publicly to finders */
   makePublic: boolean;
   createdAt: string;
   approvedAt?: string | null;
@@ -66,7 +87,6 @@ export async function hasStreetViewCoverage(
   }
 }
 
-/** Query OSM for nearby publicly usable ways/areas. */
 export async function hasOsmPublicAccess(
   lat: number,
   lng: number,
@@ -114,29 +134,119 @@ export async function hasOsmPublicAccess(
       }
       return { ok: false };
     } catch {
-      // try next endpoint
+      // try next
     }
   }
   return { ok: false, error: "osm_unreachable" };
 }
 
-export function findCoveringPermit(
+/** Any approved land claim covering the point (property owner registry). */
+export function findLandOwnerPermit(
   lat: number,
   lng: number,
-  userId: string,
   permits: LandPermit[],
 ): LandPermit | null {
   return (
-    permits.find((p) => {
-      if (p.status !== "approved") return false;
-      const allowed =
-        p.ownerId === userId ||
-        p.allowedUserIds.includes(userId) ||
-        p.allowedUserIds.includes("*");
-      if (!allowed) return false;
-      return pointInCircle(lat, lng, p.lat, p.lng, p.radiusMeters);
-    }) ?? null
+    permits.find(
+      (p) =>
+        p.status === "approved" &&
+        pointInCircle(lat, lng, p.lat, p.lng, p.radiusMeters),
+    ) ?? null
   );
+}
+
+export function placerHasPublishRights(
+  userId: string,
+  permit: LandPermit,
+): boolean {
+  return (
+    permit.ownerId === userId ||
+    permit.allowedUserIds.includes(userId) ||
+    permit.allowedUserIds.includes("*")
+  );
+}
+
+export async function decidePlacement(opts: {
+  lat: number;
+  lng: number;
+  userId: string;
+  isAdmin: boolean;
+  permits: LandPermit[];
+}): Promise<PlaceDecision> {
+  if (opts.isAdmin) {
+    return {
+      canPlace: true,
+      visibility: "public",
+      reason: "Admin drop — public",
+      source: "admin",
+    };
+  }
+
+  if (!policyEnabled()) {
+    return {
+      canPlace: true,
+      visibility: "public",
+      reason: "Public-place policy disabled",
+      source: "policy_off",
+    };
+  }
+
+  const land = findLandOwnerPermit(opts.lat, opts.lng, opts.permits);
+  if (land) {
+    if (placerHasPublishRights(opts.userId, land) && land.makePublic) {
+      return {
+        canPlace: true,
+        visibility: "public",
+        reason: `On ${land.name} with owner publish rights — public`,
+        source: "permit",
+        landPermitId: land.id,
+        landOwnerId: land.ownerId,
+        landOwnerName: land.ownerName,
+      };
+    }
+    // On claimed private land without publish rights → place privately, await owner.
+    return {
+      canPlace: true,
+      visibility: "pending_owner",
+      reason: `Private land (${land.name}). You can see it; ${land.ownerName} must approve for others.`,
+      source: "private_land",
+      landPermitId: land.id,
+      landOwnerId: land.ownerId,
+      landOwnerName: land.ownerName,
+    };
+  }
+
+  const sv = await hasStreetViewCoverage(opts.lat, opts.lng);
+  if (sv.ok) {
+    return {
+      canPlace: true,
+      visibility: "public",
+      reason: "Public-access area (Street View)",
+      source: "streetview",
+      details: { status: sv.status },
+    };
+  }
+
+  const osm = await hasOsmPublicAccess(opts.lat, opts.lng);
+  if (osm.ok) {
+    return {
+      canPlace: true,
+      visibility: "public",
+      reason: `Public-access area (OSM: ${osm.matched})`,
+      source: "osm",
+      details: { matched: osm.matched },
+    };
+  }
+
+  // Unclaimed private / unknown land: place for yourself only.
+  return {
+    canPlace: true,
+    visibility: "private",
+    reason:
+      "Private/unknown land. Only you can see this until a property owner claims the land and approves it.",
+    source: "private_land",
+    details: { streetView: sv, osm },
+  };
 }
 
 export async function evaluatePublicPlace(opts: {
@@ -146,62 +256,13 @@ export async function evaluatePublicPlace(opts: {
   isAdmin: boolean;
   permits: LandPermit[];
 }): Promise<PlaceEligibility> {
-  if (opts.isAdmin) {
-    return {
-      allowed: true,
-      reason: "Admin bypass",
-      source: "admin",
-    };
-  }
-
-  if (!policyEnabled()) {
-    return {
-      allowed: true,
-      reason: "Public-place policy disabled",
-      source: "policy_off",
-    };
-  }
-
-  const permit = findCoveringPermit(
-    opts.lat,
-    opts.lng,
-    opts.userId,
-    opts.permits,
-  );
-  if (permit) {
-    return {
-      allowed: true,
-      reason: `Permitted land: ${permit.name}`,
-      source: "permit",
-      details: { permitId: permit.id, makePublic: permit.makePublic },
-    };
-  }
-
-  const sv = await hasStreetViewCoverage(opts.lat, opts.lng);
-  if (sv.ok) {
-    return {
-      allowed: true,
-      reason: "Street View coverage suggests public roadside access",
-      source: "streetview",
-      details: { status: sv.status },
-    };
-  }
-
-  const osm = await hasOsmPublicAccess(opts.lat, opts.lng);
-  if (osm.ok) {
-    return {
-      allowed: true,
-      reason: `OpenStreetMap public way/area (${osm.matched})`,
-      source: "osm",
-      details: { matched: osm.matched },
-    };
-  }
-
+  const d = await decidePlacement(opts);
   return {
-    allowed: false,
-    reason:
-      "This spot does not look publicly accessible. Place on a public street/path/park, or request/use an approved land permit.",
-    source: "denied",
-    details: { streetView: sv, osm },
+    allowed: d.canPlace,
+    reason: d.reason,
+    source: d.source,
+    details: d.details,
+    visibility: d.visibility,
+    landOwnerName: d.landOwnerName ?? null,
   };
 }

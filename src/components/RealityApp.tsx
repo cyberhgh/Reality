@@ -96,7 +96,18 @@ export default function RealityApp() {
     allowed: boolean;
     reason: string;
     source: string;
+    visibility?: string;
+    landOwnerName?: string | null;
   } | null>(null);
+  const [ownerInbox, setOwnerInbox] = useState<
+    Array<{
+      id: string;
+      emoji: string;
+      label: string;
+      createdByName: string;
+      visibility?: string;
+    }>
+  >([]);
   const [permits, setPermits] = useState<
     Array<{
       id: string;
@@ -174,8 +185,9 @@ export default function RealityApp() {
 
   const refreshNearby = useCallback(async () => {
     if (geo.lat == null || geo.lng == null) return;
+    const viewerId = getDeviceId().slice(0, 8);
     const res = await fetch(
-      `/api/placements?lat=${geo.lat}&lng=${geo.lng}&radius=250&_=${Date.now()}`,
+      `/api/placements?lat=${geo.lat}&lng=${geo.lng}&radius=250&viewerId=${viewerId}&_=${Date.now()}`,
       { cache: "no-store" },
     );
     const data = await res.json();
@@ -191,7 +203,10 @@ export default function RealityApp() {
   }, [geo.lat, geo.lng]);
 
   const refreshDiscover = useCallback(async () => {
-    const params = new URLSearchParams({ _: String(Date.now()) });
+    const params = new URLSearchParams({
+      _: String(Date.now()),
+      viewerId: getDeviceId().slice(0, 8),
+    });
     if (geo.lat != null && geo.lng != null) {
       params.set("lat", String(geo.lat));
       params.set("lng", String(geo.lng));
@@ -200,6 +215,16 @@ export default function RealityApp() {
     const data = (await res.json()) as DiscoverPayload;
     setDiscover(data);
   }, [geo.lat, geo.lng]);
+
+  const refreshOwnerInbox = useCallback(async () => {
+    const ownerId = getDeviceId().slice(0, 8);
+    const res = await fetch(
+      `/api/owner-inbox?ownerId=${ownerId}&_=${Date.now()}`,
+      { cache: "no-store" },
+    );
+    const data = await res.json();
+    setOwnerInbox(data.pending ?? []);
+  }, []);
 
   const refreshZones = useCallback(async () => {
     const res = await fetch("/api/zones");
@@ -294,6 +319,7 @@ export default function RealityApp() {
     void refreshMyFinds();
     void refreshPlaceCheck();
     void refreshPermits();
+    void refreshOwnerInbox();
     setWatchingArea(localStorage.getItem("reality-watch-area") === "1");
     const id = setInterval(() => {
       void refreshNearby();
@@ -302,6 +328,7 @@ export default function RealityApp() {
       void refreshMyFinds();
       void refreshPlaceCheck();
       void refreshPermits();
+      void refreshOwnerInbox();
     }, 8000);
     return () => clearInterval(id);
   }, [
@@ -312,6 +339,7 @@ export default function RealityApp() {
     refreshMyFinds,
     refreshPlaceCheck,
     refreshPermits,
+    refreshOwnerInbox,
   ]);
 
   // Local "watch this area" — alert when a brand-new nearby drop appears.
@@ -448,13 +476,23 @@ export default function RealityApp() {
           { ...placed, distanceMeters: Math.hypot(nudgeN, nudgeE) },
           ...prev.filter((p) => p.id !== placed.id),
         ]);
-        setStatus(`Dropped ${placed.emoji} · snap ${placed.snapCode}`);
+        const vis = placed.visibility ?? "public";
+        const visMsg =
+          vis === "public"
+            ? "visible to everyone"
+            : vis === "pending_owner"
+              ? `only you + owner (${placed.landOwnerName ?? "pending"}) until approved`
+              : "only you can see it";
+        setStatus(
+          `Dropped ${placed.emoji} · ${visMsg} · snap ${placed.snapCode}`,
+        );
         setLabel("");
         setNote("");
         setNudgeN(0);
         setNudgeE(0);
         await refreshNearby();
         await refreshDiscover();
+        await refreshOwnerInbox();
       }
     } finally {
       setBusy(false);
@@ -1056,24 +1094,23 @@ export default function RealityApp() {
             {placeEligibility && (
               <div
                 className={`rounded-xl px-3 py-2 text-[11px] ${
-                  placeEligibility.allowed
+                  placeEligibility.visibility === "public"
                     ? "bg-emerald-400/15 text-emerald-100"
                     : "bg-amber-400/15 text-amber-100"
                 }`}
               >
-                {placeEligibility.allowed ? "Allowed" : "Blocked"} ·{" "}
-                {placeEligibility.source}: {placeEligibility.reason}
+                Will be{" "}
+                <strong>{placeEligibility.visibility ?? "public"}</strong>
+                {placeEligibility.landOwnerName
+                  ? ` · owner ${placeEligibility.landOwnerName}`
+                  : ""}
+                <br />
+                {placeEligibility.reason}
               </div>
             )}
             <button
               type="button"
-              disabled={
-                busy ||
-                geo.lat == null ||
-                (placeEligibility != null &&
-                  !placeEligibility.allowed &&
-                  !isAdmin)
-              }
+              disabled={busy || geo.lat == null}
               onClick={() => void placeHere()}
               className="w-full rounded-xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-[#06202b] disabled:opacity-50"
             >
@@ -1174,6 +1211,11 @@ export default function RealityApp() {
                     <p className="truncate text-sm">
                       {p.emoji} {p.label}{" "}
                       {foundIds.includes(p.id) ? "✓" : ""}
+                      {p.visibility && p.visibility !== "public" ? (
+                        <span className="ml-1 text-[10px] text-amber-200">
+                          · {p.visibility}
+                        </span>
+                      ) : null}
                     </p>
                     <p className="text-[11px] text-white/60">
                       {directionHint(p)} · {p.findCount} finds
@@ -1250,6 +1292,64 @@ export default function RealityApp() {
             <p>
               Signed in as <strong>{displayName}</strong>
             </p>
+            {ownerInbox.length > 0 && (
+              <div className="space-y-2 rounded-xl bg-amber-400/10 p-3">
+                <p className="text-xs font-semibold text-amber-100">
+                  Awaiting your approval as land owner ({ownerInbox.length})
+                </p>
+                {ownerInbox.map((p) => (
+                  <div
+                    key={p.id}
+                    className="flex flex-wrap items-center justify-between gap-2 text-[11px]"
+                  >
+                    <span>
+                      {p.emoji} {p.label} by {p.createdByName}
+                    </span>
+                    <span className="flex gap-2">
+                      <button
+                        type="button"
+                        className="text-emerald-300"
+                        onClick={async () => {
+                          await fetch(`/api/placements/${p.id}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              action: "approve_public",
+                              actorId: getDeviceId().slice(0, 8),
+                            }),
+                          });
+                          setStatus(`Approved ${p.emoji} for public view`);
+                          await refreshOwnerInbox();
+                          await refreshNearby();
+                          await refreshDiscover();
+                        }}
+                      >
+                        Make public
+                      </button>
+                      <button
+                        type="button"
+                        className="text-rose-300"
+                        onClick={async () => {
+                          await fetch(`/api/placements/${p.id}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              action: "keep_private",
+                              actorId: getDeviceId().slice(0, 8),
+                            }),
+                          });
+                          setStatus(`Kept ${p.emoji} private`);
+                          await refreshOwnerInbox();
+                          await refreshNearby();
+                        }}
+                      >
+                        Keep private
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <input
               value={nameDraft}
               onChange={(e) => setNameDraft(e.target.value)}

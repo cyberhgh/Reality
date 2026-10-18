@@ -47,6 +47,26 @@ export default async function ObjectPage({
     );
   }
 
+  if ((placement.visibility ?? "public") !== "public") {
+    return (
+      <main className="mx-auto flex min-h-[100dvh] max-w-lg flex-col justify-center px-6 text-white">
+        <p className="text-6xl">{placement.emoji}</p>
+        <h1 className="mt-3 text-2xl font-semibold">Not publicly visible yet</h1>
+        <p className="mt-3 text-sm text-white/70">
+          This drop is{" "}
+          <strong>{placement.visibility ?? "private"}</strong>
+          {placement.landOwnerName
+            ? ` and needs approval from ${placement.landOwnerName}`
+            : ""}
+          . Open the app signed in as the creator (or land owner) to view it.
+        </p>
+        <Link href="/" className="mt-6 text-cyan-300 underline">
+          Back to Reality
+        </Link>
+      </main>
+    );
+  }
+
   const [finds, reactions, comments] = await Promise.all([
     listFinds(id),
     listReactions(id),

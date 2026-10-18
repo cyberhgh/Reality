@@ -22,17 +22,18 @@ https://reality-geo-mvp.vercel.app
 - Optional WebXR hit-test probe when the device supports it
 - Landmark photos to help visual recognition
 
-## Public places only (policy)
+## Public vs private land visibility
 
-Drops are limited to places that look publicly accessible, unless a **land permit** covers the spot:
+| Spot type | Can place? | Who sees it? |
+|-----------|------------|--------------|
+| Public-access (Street View / OSM) | Yes | Everyone (`public`) |
+| Claimed private land (approved permit) without placer rights | Yes | Creator + land owner until owner **Make public** (`pending_owner`) |
+| Unclaimed private / unknown | Yes | Creator only (`private`) until an owner claims the land & approves |
+| Placer is land owner / pre-approved on permit | Yes | Everyone if `makePublic` |
 
-1. Approved land permit for that user (private venue with permission; drops can still be public finds)
-2. Google Street View metadata (if `GOOGLE_MAPS_API_KEY` is set)
-3. OpenStreetMap public roads/paths/parks (free fallback)
+Property owners register a **land permit** (Admin tab → request → admin approve). Pending drops on their land appear under **Me → Awaiting your approval**.
 
-Set `PUBLIC_PLACE_POLICY=off` to disable. Admins always bypass.
-
-These signals are heuristics, not legal cadastral ownership proofs.
+Set `PUBLIC_PLACE_POLICY=off` to make everything public by default. Street View / OSM are heuristics, not cadastral proof.
 
 ## Admin
 

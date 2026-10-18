@@ -3,9 +3,10 @@ import { randomUUID } from "crypto";
 import { connection } from "next/server";
 import { isAdminRequest } from "@/lib/admin";
 import { distanceMeters, makeSnapCode, pointInCircle } from "@/lib/geo";
-import { evaluatePublicPlace } from "@/lib/publicPlace";
+import { decidePlacement } from "@/lib/publicPlace";
 import {
   addPlacement,
+  canViewerSeePlacement,
   getStore,
   listPermits,
   removePlacement,
@@ -26,11 +27,15 @@ export async function GET(request: Request) {
   const lng = Number(searchParams.get("lng"));
   const radius = Number(searchParams.get("radius") ?? NEARBY_RADIUS_METERS);
   const all = searchParams.get("all") === "1";
+  const viewerId = searchParams.get("viewerId");
 
   const store = await getStore();
+  const visible = store.placements.filter((p) =>
+    canViewerSeePlacement(p, viewerId),
+  );
 
   if (all) {
-    const placements = [...store.placements].sort(
+    const placements = [...visible].sort(
       (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt),
     );
     return NextResponse.json({ placements });
@@ -43,7 +48,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const nearby = store.placements
+  const nearby = visible
     .map((p) => ({
       ...p,
       distanceMeters: distanceMeters(lat, lng, p.lat, p.lng),
@@ -122,23 +127,13 @@ export async function POST(request: Request) {
   }
 
   const permits = await listPermits();
-  const eligibility = await evaluatePublicPlace({
+  const decision = await decidePlacement({
     lat,
     lng,
     userId: createdBy,
     isAdmin: admin,
     permits,
   });
-  if (!eligibility.allowed) {
-    return NextResponse.json(
-      {
-        error: eligibility.reason,
-        code: "NOT_PUBLIC_PLACE",
-        eligibility,
-      },
-      { status: 403 },
-    );
-  }
 
   const placement: Placement = {
     id: randomUUID(),
@@ -155,7 +150,11 @@ export async function POST(request: Request) {
     snapCode: makeSnapCode(),
     findCount: 0,
     reactionCount: 0,
-    placeSource: eligibility.source,
+    placeSource: decision.source,
+    visibility: decision.visibility,
+    landPermitId: decision.landPermitId ?? null,
+    landOwnerId: decision.landOwnerId ?? null,
+    landOwnerName: decision.landOwnerName ?? null,
   };
 
   try {
@@ -170,7 +169,20 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({ placement, eligibility }, { status: 201 });
+  return NextResponse.json(
+    {
+      placement,
+      decision,
+      eligibility: {
+        allowed: true,
+        reason: decision.reason,
+        source: decision.source,
+        visibility: decision.visibility,
+        landOwnerName: decision.landOwnerName ?? null,
+      },
+    },
+    { status: 201 },
+  );
 }
 
 export async function DELETE(request: Request) {

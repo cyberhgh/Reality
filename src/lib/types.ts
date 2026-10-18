@@ -18,7 +18,16 @@ export type Placement = {
   /** Optional photo of the physical spot to help finders */
   landmarkUrl?: string | null;
   /** How the drop passed the public-place policy */
-  placeSource?: "admin" | "permit" | "streetview" | "osm" | "policy_off" | string;
+  placeSource?: "admin" | "permit" | "streetview" | "osm" | "policy_off" | "private_land" | string;
+  /**
+   * public — visible to everyone
+   * private — only creator
+   * pending_owner — creator + land owner; others after owner approves
+   */
+  visibility?: "public" | "private" | "pending_owner";
+  landPermitId?: string | null;
+  landOwnerId?: string | null;
+  landOwnerName?: string | null;
 };
 
 export type BanZone = {

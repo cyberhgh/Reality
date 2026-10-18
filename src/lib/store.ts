@@ -65,7 +65,24 @@ export function normalizePlacement(raw: Partial<Placement> & { id: string }): Pl
     reactionCount: Number(raw.reactionCount ?? 0),
     landmarkUrl: raw.landmarkUrl ?? null,
     placeSource: raw.placeSource,
+    visibility: raw.visibility ?? "public",
+    landPermitId: raw.landPermitId ?? null,
+    landOwnerId: raw.landOwnerId ?? null,
+    landOwnerName: raw.landOwnerName ?? null,
   };
+}
+
+/** Who can see a drop in feeds / nearby lists. */
+export function canViewerSeePlacement(
+  p: Placement,
+  viewerId: string | null,
+): boolean {
+  const visibility = p.visibility ?? "public";
+  if (visibility === "public") return true;
+  if (!viewerId) return false;
+  if (p.createdBy === viewerId) return true;
+  if (visibility === "pending_owner" && p.landOwnerId === viewerId) return true;
+  return false;
 }
 
 async function fetchJson<T>(url: string): Promise<T | null> {
